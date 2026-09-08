@@ -92,20 +92,27 @@ const cleanJson = (content) => {
   }
 }
 
-const normalizeReport = (report) => ({
-  productName: report.productName || 'Unidentified packaged commodity',
-  category: report.category || 'Commodity',
-  brand: report.brand || 'Not visible',
-  summary: report.summary || 'The label was inspected against the seven-point compliance checklist.',
-  barcodeInfo: report.barcodeInfo || { detected: false, value: '', productName: '', brand: '', category: '', status: 'NOT_PROVIDED' },
-  qrInfo: report.qrInfo || { detected: false, content: '', type: 'NOT_FOUND', verificationStatus: 'NOT_FOUND' },
+const isPlaceholder = (value) => {
+  if (typeof value !== 'string') return false
+  return ['string', 'unknown', 'null', 'undefined', 'n/a'].includes(value.trim().toLowerCase())
+}
+
+const cleanString = (value, fallback = '') => isPlaceholder(value) ? fallback : String(value || fallback)
+
+const normalizeReport = (report, suppliedCodes = {}) => ({
+  productName: cleanString(report.productName, 'Unidentified packaged commodity'),
+  category: cleanString(report.category, 'Commodity'),
+  brand: cleanString(report.brand, 'Not visible'),
+  summary: cleanString(report.summary, 'The label was inspected against the seven-point compliance checklist.'),
+  barcodeInfo: suppliedCodes.barcode ? { detected: true, value: suppliedCodes.barcode, productName: cleanString(report.barcodeInfo?.productName), brand: cleanString(report.barcodeInfo?.brand), category: cleanString(report.barcodeInfo?.category), status: 'FOUND' } : { detected: false, value: '', productName: '', brand: '', category: '', status: 'NOT_PROVIDED' },
+  qrInfo: suppliedCodes.qrContent ? { detected: true, content: suppliedCodes.qrContent, type: /^https?:\/\//i.test(suppliedCodes.qrContent) ? 'URL' : 'TEXT', verificationStatus: /^https?:\/\//i.test(suppliedCodes.qrContent) ? 'DO_NOT_OPEN_AUTOMATICALLY' : 'SAFE_TO_REVIEW' } : { detected: false, content: '', type: 'NOT_FOUND', verificationStatus: 'NOT_FOUND' },
   extractedInfo: report.extractedInfo || { mrp: 'UNKNOWN', netQuantity: 'UNKNOWN', batchLot: 'UNKNOWN', manufacturingDate: 'UNKNOWN', expiryBestBefore: 'UNKNOWN', manufacturer: 'UNKNOWN', manufacturerAddress: 'UNKNOWN', consumerCare: 'UNKNOWN', countryOfOrigin: 'UNKNOWN', otherDeclarations: [] },
   complianceScore: Number.isFinite(Number(report.complianceScore)) ? Math.max(0, Math.min(100, Number(report.complianceScore))) : 0,
   complianceStatus: ['COMPLIANT', 'NEEDS_REVIEW', 'NON_COMPLIANT'].includes(report.complianceStatus) ? report.complianceStatus : 'NEEDS_REVIEW',
   aiConfidence: report.aiConfidence || { productDetection: 'LOW', ocr: 'LOW', codeDetection: 'LOW', compliance: 'LOW', overall: 'LOW' },
   compliance: Array.isArray(report.compliance) ? report.compliance : [],
-  violations: Array.isArray(report.violations) ? report.violations : [],
-  warnings: Array.isArray(report.warnings) ? report.warnings : [],
+  violations: Array.isArray(report.violations) ? report.violations.filter((item) => !isPlaceholder(item?.name) && !isPlaceholder(item?.reason)).map((item) => ({ name: cleanString(item.name, 'Unclear declaration'), reason: cleanString(item.reason, 'The declaration was not clearly visible.'), confidence: cleanString(item.confidence, 'LOW') })) : [],
+  warnings: Array.isArray(report.warnings) ? report.warnings.filter((item) => !isPlaceholder(item)).map((item) => String(item)) : [],
   health: report.health || { ingredients: [], nutriScore: 'UNKNOWN', allergens: [], additives: [] },
   technology: report.technology || { specifications: [] },
   market: report.market || { observedPrice: 'Not visible', pricePerUnit: 'Not available', brandVerification: 'REVIEW', comparisons: [], recommendations: [] },
@@ -151,7 +158,7 @@ const analyze = async (request, response) => {
     const suppliedCodes = barcode || qrContent ? `\nMachine-readable evidence supplied by the scanner: barcode=${barcode || 'none'}; QR=${qrContent || 'none'}. Preserve these values exactly and do not invent replacements.` : ''
     const prompt = localizedPrompt(language) + suppliedCodes
     const report = geminiKey ? await analyzeWithGemini(imageData, prompt) : await analyzeWithNvidia(imageData, prompt)
-    return sendJson(response, 200, { provider, ...normalizeReport(report) })
+    return sendJson(response, 200, { provider, ...normalizeReport(report, { barcode, qrContent }) })
   } catch (error) {
     return sendJson(response, 502, { error: error instanceof Error ? error.message : 'The inspection service could not analyze this image.' })
   }
