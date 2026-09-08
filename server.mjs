@@ -43,9 +43,9 @@ const parseMultipartImage = async (request) => {
   return { image, imageType }
 }
 
-const schemaPrompt = `You are an AI packaged commodity compliance inspector. Inspect the product label and return ONLY valid JSON matching this shape:
-{"productName":"string","category":"string","brand":"string","summary":"string","compliance":[{"label":"MRP|Net Quantity|Mfg / Expiry Date|Manufacturer|Consumer Care|Country of Origin|Label Legibility","status":"PASS|FAIL|REVIEW","value":"string","confidence":"HIGH|MEDIUM|LOW"}],"health":{"ingredients":["string"],"nutriScore":"A|B|C|D|E|UNKNOWN","allergens":["string"],"additives":["string"]},"technology":{"specifications":["string"]},"market":{"observedPrice":"string","pricePerUnit":"string","brandVerification":"VERIFIED|UNVERIFIED|REVIEW","comparisons":[{"seller":"string","price":"string","unitPrice":"string"}],"recommendations":["string"]},"report":{"findings":["string"],"actions":["string"]}}
-Read only visible evidence. Use UNKNOWN or REVIEW when a field is not legible; never invent a price, barcode, expiry, manufacturer, or certification. For non-food items, leave health arrays empty and use UNKNOWN for nutriScore.`
+const schemaPrompt = `You are an AI packaged commodity compliance inspector. Inspect the package image and return ONLY valid JSON matching this shape:
+{"productName":"string","category":"string","brand":"string","summary":"string","barcodeInfo":{"detected":true,"value":"string","productName":"string","brand":"string","category":"string","status":"FOUND|NOT_FOUND|NOT_PROVIDED"},"qrInfo":{"detected":true,"content":"string","type":"URL|TEXT|NOT_FOUND","verificationStatus":"SAFE_TO_REVIEW|DO_NOT_OPEN_AUTOMATICALLY|NOT_FOUND"},"extractedInfo":{"mrp":"string","netQuantity":"string","batchLot":"string","manufacturingDate":"string","expiryBestBefore":"string","manufacturer":"string","manufacturerAddress":"string","consumerCare":"string","countryOfOrigin":"string","otherDeclarations":["string"]},"complianceScore":72,"complianceStatus":"COMPLIANT|NEEDS_REVIEW|NON_COMPLIANT","aiConfidence":{"productDetection":"HIGH|MEDIUM|LOW","ocr":"HIGH|MEDIUM|LOW","codeDetection":"HIGH|MEDIUM|LOW","compliance":"HIGH|MEDIUM|LOW","overall":"HIGH|MEDIUM|LOW"},"compliance":[{"label":"MRP|Net Quantity|Mfg / Expiry Date|Manufacturer|Consumer Care|Country of Origin|Label Legibility|Batch / Lot","status":"PASS|FAIL|REVIEW","value":"string","confidence":"HIGH|MEDIUM|LOW"}],"violations":[{"name":"string","reason":"string","confidence":"HIGH|MEDIUM|LOW"}],"warnings":["string"],"health":{"ingredients":["string"],"nutriScore":"A|B|C|D|E|UNKNOWN","allergens":["string"],"additives":["string"]},"technology":{"specifications":["string"]},"market":{"observedPrice":"string","pricePerUnit":"string","brandVerification":"VERIFIED|UNVERIFIED|REVIEW","comparisons":[{"seller":"string","price":"string","unitPrice":"string"}],"recommendations":["string"]},"report":{"findings":["string"],"actions":["string"]}}
+Read only visible evidence. Use UNKNOWN or REVIEW when not legible. Never invent product details, prices, dates, manufacturers, certifications, or decoded code content. Calculate complianceScore from the checks. A missing or unclear mandatory declaration should be a violation or warning with a simple evidence-based reason. For non-food items, leave health arrays empty and use UNKNOWN for nutriScore.`
 
 const extractJsonObject = (content) => {
   const text = String(content || '').replace(/```(?:json)?/gi, '').replace(/```/g, '').trim()
@@ -97,7 +97,15 @@ const normalizeReport = (report) => ({
   category: report.category || 'Commodity',
   brand: report.brand || 'Not visible',
   summary: report.summary || 'The label was inspected against the seven-point compliance checklist.',
+  barcodeInfo: report.barcodeInfo || { detected: false, value: '', productName: '', brand: '', category: '', status: 'NOT_PROVIDED' },
+  qrInfo: report.qrInfo || { detected: false, content: '', type: 'NOT_FOUND', verificationStatus: 'NOT_FOUND' },
+  extractedInfo: report.extractedInfo || { mrp: 'UNKNOWN', netQuantity: 'UNKNOWN', batchLot: 'UNKNOWN', manufacturingDate: 'UNKNOWN', expiryBestBefore: 'UNKNOWN', manufacturer: 'UNKNOWN', manufacturerAddress: 'UNKNOWN', consumerCare: 'UNKNOWN', countryOfOrigin: 'UNKNOWN', otherDeclarations: [] },
+  complianceScore: Number.isFinite(Number(report.complianceScore)) ? Math.max(0, Math.min(100, Number(report.complianceScore))) : 0,
+  complianceStatus: ['COMPLIANT', 'NEEDS_REVIEW', 'NON_COMPLIANT'].includes(report.complianceStatus) ? report.complianceStatus : 'NEEDS_REVIEW',
+  aiConfidence: report.aiConfidence || { productDetection: 'LOW', ocr: 'LOW', codeDetection: 'LOW', compliance: 'LOW', overall: 'LOW' },
   compliance: Array.isArray(report.compliance) ? report.compliance : [],
+  violations: Array.isArray(report.violations) ? report.violations : [],
+  warnings: Array.isArray(report.warnings) ? report.warnings : [],
   health: report.health || { ingredients: [], nutriScore: 'UNKNOWN', allergens: [], additives: [] },
   technology: report.technology || { specifications: [] },
   market: report.market || { observedPrice: 'Not visible', pricePerUnit: 'Not available', brandVerification: 'REVIEW', comparisons: [], recommendations: [] },
@@ -137,7 +145,11 @@ const analyze = async (request, response) => {
     const { image, imageType } = await parseMultipartImage(request)
     const imageData = { type: imageType, base64: image.toString('base64') }
     const provider = geminiKey ? 'gemini' : 'nvidia'
-    const prompt = localizedPrompt(request.headers['x-report-language'] || 'English')
+    const language = request.headers['x-report-language'] || 'English'
+    const barcode = request.headers['x-barcode'] || ''
+    const qrContent = request.headers['x-qr-content'] ? decodeURIComponent(request.headers['x-qr-content']) : ''
+    const suppliedCodes = barcode || qrContent ? `\nMachine-readable evidence supplied by the scanner: barcode=${barcode || 'none'}; QR=${qrContent || 'none'}. Preserve these values exactly and do not invent replacements.` : ''
+    const prompt = localizedPrompt(language) + suppliedCodes
     const report = geminiKey ? await analyzeWithGemini(imageData, prompt) : await analyzeWithNvidia(imageData, prompt)
     return sendJson(response, 200, { provider, ...normalizeReport(report) })
   } catch (error) {
@@ -165,7 +177,7 @@ const voiceReport = async (request, response) => {
 
 const contentTypes = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' }
 const serveFile = async (request, response) => {
-  const requestPath = request.url === '/' ? '/index.html' : new URL(request.url, 'http://localhost').pathname
+  const requestPath = new URL(request.url, 'http://localhost').pathname === '/' ? '/index.html' : new URL(request.url, 'http://localhost').pathname
   const candidate = normalize(join(dist, requestPath))
   const filePath = candidate.startsWith(dist) && existsSync(candidate) ? candidate : join(dist, 'index.html')
   try { const stats = await fs.stat(filePath); if (!stats.isFile()) throw new Error('Not a file'); response.writeHead(200, { 'Content-Type': contentTypes[extname(filePath)] || 'application/octet-stream' }); createReadStream(filePath).pipe(response) } catch { response.writeHead(404); response.end('Not found') }
