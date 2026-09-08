@@ -9,7 +9,7 @@ const port = Number(process.env.PORT || 5173)
 const maxImageBytes = 15 * 1024 * 1024
 const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY
 const geminiModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash'
-const nvidiaKey = process.env.NVIDIA_API_KEY
+const nvidiaKey = process.env.NVIDIA_API_KEY || process.env.NVIDIA_NIM_API_KEY || process.env.NVAPI_KEY
 const nvidiaModel = process.env.NVIDIA_MODEL || 'meta/llama-3.2-11b-vision-instruct'
 const elevenLabsKey = process.env.ELEVENLABS_API_KEY
 const elevenLabsVoice = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM'
@@ -87,7 +87,7 @@ const analyzeWithNvidia = async (imageData) => {
 }
 
 const analyze = async (request, response) => {
-  if (!geminiKey && !nvidiaKey) return sendJson(response, 503, { error: 'No vision model is configured. Add GEMINI_API_KEY or NVIDIA_API_KEY in the Render service environment.' })
+  if (!geminiKey && !nvidiaKey) return sendJson(response, 503, { error: 'No vision model is configured. In Render, add NVIDIA_API_KEY with your nvapi key, then redeploy the service.' })
   try {
     const { image, imageType } = await parseMultipartImage(request)
     const imageData = { type: imageType, base64: image.toString('base64') }

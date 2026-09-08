@@ -22,4 +22,13 @@ Set these values in Render or a local `.env`-equivalent process environment. Nev
 - `ELEVENLABS_API_KEY` required for the voice report button.
 - `ELEVENLABS_VOICE_ID` optional, defaults to a multilingual voice.
 
+### Render fix for “No vision model is configured”
+
+1. Open the `rockstar-lens` service in Render.
+2. Open **Environment** and create `NVIDIA_API_KEY`.
+3. Paste the NVIDIA key as the value, save, and click **Manual Deploy → Deploy latest commit**.
+4. Confirm the key name is exactly `NVIDIA_API_KEY`; `sync: false` in `render.yaml` declares the secret but cannot fill it automatically.
+
+The backend also accepts `NVIDIA_NIM_API_KEY` and `NVAPI_KEY` for existing deployments, but `NVIDIA_API_KEY` is the recommended name.
+
 The app uses Gemini first and NVIDIA vision as a fallback. The API returns visible-evidence-only JSON and marks unreadable fields as `REVIEW` or `UNKNOWN`; it does not invent prices, dates, manufacturers, or certifications.
