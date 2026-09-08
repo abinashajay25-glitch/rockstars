@@ -17,9 +17,7 @@ Set these values in Render or a local `.env`-equivalent process environment. Nev
 
 - `GEMINI_API_KEY` required for the primary Gemini vision path.
 - `GEMINI_MODEL` optional, defaults to `gemini-2.5-flash`.
-- `ASTRA_API_KEY` optional OpenAI-compatible fallback.
-- `ASTRA_API_URL` and `ASTRA_MODEL` optional when using a compatible Astra endpoint.
 - `ELEVENLABS_API_KEY` required for the voice report button.
 - `ELEVENLABS_VOICE_ID` optional, defaults to a multilingual voice.
 
-The app uses Gemini first when both vision providers are configured. The API returns visible-evidence-only JSON and marks unreadable fields as `REVIEW` or `UNKNOWN`; it does not invent prices, dates, manufacturers, or certifications.
+The app uses Gemini as its only vision provider. The API returns visible-evidence-only JSON and marks unreadable fields as `REVIEW` or `UNKNOWN`; it does not invent prices, dates, manufacturers, or certifications.

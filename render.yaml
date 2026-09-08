@@ -10,12 +10,6 @@ services:
         sync: false
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
-      - key: ASTRA_API_KEY
-        sync: false
-      - key: ASTRA_API_URL
-        sync: false
-      - key: ASTRA_MODEL
-        value: gpt-4o-mini
       - key: ELEVENLABS_API_KEY
         sync: false
       - key: ELEVENLABS_VOICE_ID

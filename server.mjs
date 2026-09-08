@@ -9,9 +9,6 @@ const port = Number(process.env.PORT || 5173)
 const maxImageBytes = 15 * 1024 * 1024
 const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY
 const geminiModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash'
-const astraKey = process.env.ASTRA_API_KEY || process.env.OPENAI_API_KEY
-const astraUrl = process.env.ASTRA_API_URL || 'https://api.openai.com/v1/chat/completions'
-const astraModel = process.env.ASTRA_MODEL || 'gpt-4o-mini'
 const elevenLabsKey = process.env.ELEVENLABS_API_KEY
 const elevenLabsVoice = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM'
 
@@ -76,23 +73,13 @@ const analyzeWithGemini = async (imageData) => {
   return cleanJson(payload.candidates?.[0]?.content?.parts?.[0]?.text)
 }
 
-const analyzeWithAstra = async (imageData) => {
-  const upstream = await fetch(astraUrl, {
-    method: 'POST', headers: { Authorization: `Bearer ${astraKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: astraModel, temperature: 0.1, response_format: { type: 'json_object' }, messages: [{ role: 'user', content: [{ type: 'text', text: schemaPrompt }, { type: 'image_url', image_url: { url: `data:${imageData.type};base64,${imageData.base64}` } }] }] }),
-  })
-  const payload = await upstream.json()
-  if (!upstream.ok) throw new Error(payload.error?.message || 'Astra image analysis failed.')
-  return cleanJson(payload.choices?.[0]?.message?.content)
-}
-
 const analyze = async (request, response) => {
-  if (!geminiKey && !astraKey) return sendJson(response, 503, { error: 'No vision provider is configured. Add GEMINI_API_KEY or ASTRA_API_KEY to the server environment.' })
+  if (!geminiKey) return sendJson(response, 503, { error: 'Gemini is not configured. Add GEMINI_API_KEY in the Render service environment.' })
   try {
     const { image, imageType } = await parseMultipartImage(request)
     const imageData = { type: imageType, base64: image.toString('base64') }
-    const report = geminiKey ? await analyzeWithGemini(imageData) : await analyzeWithAstra(imageData)
-    return sendJson(response, 200, { provider: geminiKey ? 'gemini' : 'astra', ...normalizeReport(report) })
+    const report = await analyzeWithGemini(imageData)
+    return sendJson(response, 200, { provider: 'gemini', ...normalizeReport(report) })
   } catch (error) {
     return sendJson(response, 502, { error: error instanceof Error ? error.message : 'The inspection service could not analyze this image.' })
   }
