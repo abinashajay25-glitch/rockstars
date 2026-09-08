@@ -9,6 +9,8 @@ const port = Number(process.env.PORT || 5173)
 const maxImageBytes = 15 * 1024 * 1024
 const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY
 const geminiModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash'
+const nvidiaKey = process.env.NVIDIA_API_KEY
+const nvidiaModel = process.env.NVIDIA_MODEL || 'meta/llama-3.2-11b-vision-instruct'
 const elevenLabsKey = process.env.ELEVENLABS_API_KEY
 const elevenLabsVoice = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM'
 
@@ -73,13 +75,25 @@ const analyzeWithGemini = async (imageData) => {
   return cleanJson(payload.candidates?.[0]?.content?.parts?.[0]?.text)
 }
 
+const analyzeWithNvidia = async (imageData) => {
+  const upstream = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${nvidiaKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: nvidiaModel, temperature: 0.1, max_tokens: 1800, messages: [{ role: 'user', content: [{ type: 'text', text: schemaPrompt }, { type: 'image_url', image_url: { url: `data:${imageData.type};base64,${imageData.base64}` } }] }] }),
+  })
+  const payload = await upstream.json()
+  if (!upstream.ok) throw new Error(payload.error?.message || 'NVIDIA image analysis failed.')
+  return cleanJson(payload.choices?.[0]?.message?.content)
+}
+
 const analyze = async (request, response) => {
-  if (!geminiKey) return sendJson(response, 503, { error: 'Gemini is not configured. Add GEMINI_API_KEY in the Render service environment.' })
+  if (!geminiKey && !nvidiaKey) return sendJson(response, 503, { error: 'No vision model is configured. Add GEMINI_API_KEY or NVIDIA_API_KEY in the Render service environment.' })
   try {
     const { image, imageType } = await parseMultipartImage(request)
     const imageData = { type: imageType, base64: image.toString('base64') }
-    const report = await analyzeWithGemini(imageData)
-    return sendJson(response, 200, { provider: 'gemini', ...normalizeReport(report) })
+    const provider = geminiKey ? 'gemini' : 'nvidia'
+    const report = geminiKey ? await analyzeWithGemini(imageData) : await analyzeWithNvidia(imageData)
+    return sendJson(response, 200, { provider, ...normalizeReport(report) })
   } catch (error) {
     return sendJson(response, 502, { error: error instanceof Error ? error.message : 'The inspection service could not analyze this image.' })
   }
