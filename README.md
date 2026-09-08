@@ -1,4 +1,7 @@
-# Rockstar Lens / SIH26034
+$env:NVIDIA_API_KEY="your_api_key"
+node server.mjs
+
+# Rockstar Lens
 
 AI packaged commodity compliance checker with camera/image intake, OCR + vision inspection, seven-point label validation, health and technology intelligence, market comparison, multilingual reports, PDF printing, and ElevenLabs voice output.
 
@@ -22,7 +25,7 @@ Set these values in Render or a local `.env`-equivalent process environment. Nev
 - `ELEVENLABS_API_KEY` required for the voice report button.
 - `ELEVENLABS_VOICE_ID` optional, defaults to a multilingual voice.
 
-### Render fix for “No vision model is configured”
+### Render vision configuration
 
 1. Open the `rockstar-lens` service in Render.
 2. Open **Environment** and create `NVIDIA_API_KEY`.

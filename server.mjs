@@ -43,14 +43,53 @@ const parseMultipartImage = async (request) => {
   return { image, imageType }
 }
 
-const schemaPrompt = `You are an AI packaged commodity compliance inspector for India's SIH26034 challenge. Inspect the product label and return ONLY valid JSON matching this shape:
+const schemaPrompt = `You are an AI packaged commodity compliance inspector. Inspect the product label and return ONLY valid JSON matching this shape:
 {"productName":"string","category":"string","brand":"string","summary":"string","compliance":[{"label":"MRP|Net Quantity|Mfg / Expiry Date|Manufacturer|Consumer Care|Country of Origin|Label Legibility","status":"PASS|FAIL|REVIEW","value":"string","confidence":"HIGH|MEDIUM|LOW"}],"health":{"ingredients":["string"],"nutriScore":"A|B|C|D|E|UNKNOWN","allergens":["string"],"additives":["string"]},"technology":{"specifications":["string"]},"market":{"observedPrice":"string","pricePerUnit":"string","brandVerification":"VERIFIED|UNVERIFIED|REVIEW","comparisons":[{"seller":"string","price":"string","unitPrice":"string"}],"recommendations":["string"]},"report":{"findings":["string"],"actions":["string"]}}
 Read only visible evidence. Use UNKNOWN or REVIEW when a field is not legible; never invent a price, barcode, expiry, manufacturer, or certification. For non-food items, leave health arrays empty and use UNKNOWN for nutriScore.`
 
+const extractJsonObject = (content) => {
+  const text = String(content || '').replace(/```(?:json)?/gi, '').replace(/```/g, '').trim()
+  const start = text.indexOf('{')
+  if (start === -1) return null
+
+  let depth = 0
+  let quoted = false
+  let escaped = false
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index]
+    if (quoted) {
+      if (escaped) escaped = false
+      else if (character === '\\') escaped = true
+      else if (character === '"') quoted = false
+      continue
+    }
+    if (character === '"') quoted = true
+    else if (character === '{') depth += 1
+    else if (character === '}') {
+      depth -= 1
+      if (depth === 0) return text.slice(start, index + 1)
+    }
+  }
+  return null
+}
+
 const cleanJson = (content) => {
-  const match = String(content || '').match(/\{[\s\S]*\}/)
-  if (!match) throw new Error('The model returned no structured inspection report.')
-  return JSON.parse(match[0])
+  const text = typeof content === 'string' ? content.trim() : JSON.stringify(content || '')
+  const json = extractJsonObject(text)
+  if (json) {
+    try { return JSON.parse(json) } catch { /* Fall through to an evidence-only report. */ }
+  }
+  return {
+    productName: 'Image inspection',
+    category: 'Packaged commodity',
+    brand: 'Not confirmed',
+    summary: text || 'The model returned no readable inspection details.',
+    compliance: [],
+    health: { ingredients: [], nutriScore: 'UNKNOWN', allergens: [], additives: [] },
+    technology: { specifications: [] },
+    market: { observedPrice: 'Not visible', pricePerUnit: 'Not available', brandVerification: 'REVIEW', comparisons: [], recommendations: [] },
+    report: { findings: ['The model response was returned as visible text rather than structured fields.'], actions: ['Review the label manually and run the inspection again if structured fields are needed.'] },
+  }
 }
 
 const normalizeReport = (report) => ({
@@ -65,21 +104,27 @@ const normalizeReport = (report) => ({
   report: report.report || { findings: [], actions: [] },
 })
 
-const analyzeWithGemini = async (imageData) => {
+const localizedPrompt = (language) => language === 'தமிழ்'
+  ? `${schemaPrompt}\nWrite every human-readable value in Tamil.`
+  : language === 'हिन्दी'
+    ? `${schemaPrompt}\nWrite every human-readable value in Hindi.`
+    : schemaPrompt
+
+const analyzeWithGemini = async (imageData, prompt) => {
   const upstream = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiKey}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts: [{ text: schemaPrompt }, { inline_data: { mime_type: imageData.type, data: imageData.base64 } }] }], generationConfig: { temperature: 0.1, responseMimeType: 'application/json' } }),
+    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: imageData.type, data: imageData.base64 } }] }], generationConfig: { temperature: 0.1, responseMimeType: 'application/json' } }),
   })
   const payload = await upstream.json()
   if (!upstream.ok) throw new Error(payload.error?.message || 'Gemini image analysis failed.')
   return cleanJson(payload.candidates?.[0]?.content?.parts?.[0]?.text)
 }
 
-const analyzeWithNvidia = async (imageData) => {
+const analyzeWithNvidia = async (imageData, prompt) => {
   const upstream = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${nvidiaKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: nvidiaModel, temperature: 0.1, max_tokens: 1800, messages: [{ role: 'user', content: [{ type: 'text', text: schemaPrompt }, { type: 'image_url', image_url: { url: `data:${imageData.type};base64,${imageData.base64}` } }] }] }),
+    body: JSON.stringify({ model: nvidiaModel, temperature: 0.1, max_tokens: 1800, response_format: { type: 'json_object' }, messages: [{ role: 'user', content: [{ type: 'text', text: `${prompt}\nReturn one JSON object only. Do not add markdown or explanatory text.` }, { type: 'image_url', image_url: { url: `data:${imageData.type};base64,${imageData.base64}` } }] }] }),
   })
   const payload = await upstream.json()
   if (!upstream.ok) throw new Error(payload.error?.message || 'NVIDIA image analysis failed.')
@@ -92,7 +137,8 @@ const analyze = async (request, response) => {
     const { image, imageType } = await parseMultipartImage(request)
     const imageData = { type: imageType, base64: image.toString('base64') }
     const provider = geminiKey ? 'gemini' : 'nvidia'
-    const report = geminiKey ? await analyzeWithGemini(imageData) : await analyzeWithNvidia(imageData)
+    const prompt = localizedPrompt(request.headers['x-report-language'] || 'English')
+    const report = geminiKey ? await analyzeWithGemini(imageData, prompt) : await analyzeWithNvidia(imageData, prompt)
     return sendJson(response, 200, { provider, ...normalizeReport(report) })
   } catch (error) {
     return sendJson(response, 502, { error: error instanceof Error ? error.message : 'The inspection service could not analyze this image.' })
