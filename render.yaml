@@ -6,7 +6,17 @@ services:
     startCommand: npm start
     healthCheckPath: /
     envVars:
-      - key: NVIDIA_API_KEY
+      - key: GEMINI_API_KEY
         sync: false
-      - key: NVIDIA_MODEL
-        value: meta/llama-3.2-11b-vision-instruct
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: ASTRA_API_KEY
+        sync: false
+      - key: ASTRA_API_URL
+        sync: false
+      - key: ASTRA_MODEL
+        value: gpt-4o-mini
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        value: 21m00Tcm4TlvDq8ikWAM

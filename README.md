@@ -1,32 +1,25 @@
-# React + TypeScript + Vite
+# Rockstar Lens / SIH26034
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+AI packaged commodity compliance checker with camera/image intake, OCR + vision inspection, seven-point label validation, health and technology intelligence, market comparison, multilingual reports, PDF printing, and ElevenLabs voice output.
 
-Currently, two official plugins are available:
+## Local development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+The production server is started with `npm start` after `npm run build`.
+
+## Server environment
+
+Set these values in Render or a local `.env`-equivalent process environment. Never put provider keys in React or commit them to Git:
+
+- `GEMINI_API_KEY` required for the primary Gemini vision path.
+- `GEMINI_MODEL` optional, defaults to `gemini-2.5-flash`.
+- `ASTRA_API_KEY` optional OpenAI-compatible fallback.
+- `ASTRA_API_URL` and `ASTRA_MODEL` optional when using a compatible Astra endpoint.
+- `ELEVENLABS_API_KEY` required for the voice report button.
+- `ELEVENLABS_VOICE_ID` optional, defaults to a multilingual voice.
+
+The app uses Gemini first when both vision providers are configured. The API returns visible-evidence-only JSON and marks unreadable fields as `REVIEW` or `UNKNOWN`; it does not invent prices, dates, manufacturers, or certifications.
