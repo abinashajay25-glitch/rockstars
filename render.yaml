@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: rockstar-lens
+    runtime: node
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: NVIDIA_MODEL
+        value: meta/llama-3.2-11b-vision-instruct
