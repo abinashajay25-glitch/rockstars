@@ -95,6 +95,27 @@ function App() {
   useEffect(() => { if (!file) { setPreviewUrl(''); return }; const url = URL.createObjectURL(file); setPreviewUrl(url); return () => URL.revokeObjectURL(url) }, [file])
   useEffect(() => { try { setHistory(JSON.parse(localStorage.getItem('rockstar-lens-history') || '[]')) } catch { setHistory([]) } }, [])
   useEffect(() => () => streamRef.current?.getTracks().forEach((track) => track.stop()), [])
+  useEffect(() => {
+    const glow = document.querySelector<HTMLElement>('.cursor-glow')
+    const trail = Array.from(document.querySelectorAll<HTMLElement>('.cursor-trail'))
+    if (!glow || trail.length === 0 || !window.matchMedia('(hover: hover) and (pointer: fine)').matches) return
+    const interactive = 'a, button, input, select, label, [role="button"]'
+    let frame = 0
+    let position = { x: -100, y: -100 }
+    const onMove = (event: PointerEvent) => {
+      position = { x: event.clientX, y: event.clientY }
+      glow.style.transform = `translate3d(${position.x}px, ${position.y}px, 0)`
+      trail.forEach((item, index) => { item.style.transform = `translate3d(${position.x}px, ${position.y}px, 0) scale(${1 - index * .12})` })
+      glow.classList.add('is-visible')
+    }
+    const onOver = (event: Event) => { if ((event.target as HTMLElement).closest(interactive)) glow.classList.add('is-hover') }
+    const onOut = (event: Event) => { if ((event.target as HTMLElement).closest(interactive)) glow.classList.remove('is-hover') }
+    document.addEventListener('pointermove', onMove)
+    document.addEventListener('pointerover', onOver)
+    document.addEventListener('pointerout', onOut)
+    frame = window.requestAnimationFrame(() => { glow.style.transform = `translate3d(${position.x}px, ${position.y}px, 0)` })
+    return () => { document.removeEventListener('pointermove', onMove); document.removeEventListener('pointerover', onOver); document.removeEventListener('pointerout', onOut); window.cancelAnimationFrame(frame) }
+  }, [])
 
   const decodePackageCode = async (url: string) => {
     setCodeMessage('Detecting barcode or QR...')
@@ -309,7 +330,7 @@ function App() {
   const nonCompliantCount = history.filter((item) => item.status === 'NON_COMPLIANT').length
   const commonViolations = [...new Set(history.flatMap((item) => item.violations))].slice(0, 4)
 
-  return <main className="site-shell">
+  return <main className="site-shell"><span className="cursor-glow" aria-hidden="true" />{[0, 1, 2, 3].map((item) => <span className="cursor-trail" key={item} aria-hidden="true" />)}
     <nav className="topbar"><a className="brand" href="#top"><span className="brand-mark">R</span><span>ROCKSTAR<br />LENS</span></a><div className="nav-links"><a href="#scan">{text.navScan}</a><a href="#validator">{text.navValidator}</a><a href="#intel">{text.navIntel}</a></div><label className="language-select"><span>{text.lang}</span><select value={language} onChange={(event) => setLanguage(event.target.value as Language)} aria-label={text.lang}><option>English</option><option>தமிழ்</option><option>हिन्दी</option></select></label></nav>
     <section className="hero" id="top"><div className="hero-copy"><p className="kicker">{text.kicker}</p><h1>READ<br /><em>THE</em> LABEL.</h1><p className="hero-text">{text.heroText}</p><a className="scroll-cue" href="#scan"><span>↓</span> {text.launch}</a></div><div className="hero-art"><div className="hero-grid" /><img className="rockstar-hero-image" src="https://cms-static-prod.ros.rockstargames.com/images/18izrhn535ym/vH3cmDeyYwZAfOSRrFzF7/a647ee83433be34607363ef254639604/vH3cmDeyYwZAfOSRrFzF7.svg" alt="Rockstar Games logo" /><span className="hero-stamp">DETECT<br />VALIDATE<br />ANALYZE</span></div></section>
     <section className="mission-strip"><span>01 / {text.detect}</span><span>02 / {text.validate}</span><span>03 / {text.analyze}</span><span>04 / {text.report}</span></section>
