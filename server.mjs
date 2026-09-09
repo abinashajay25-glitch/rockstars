@@ -153,12 +153,13 @@ const analyze = async (request, response) => {
     const imageData = { type: imageType, base64: image.toString('base64') }
     const provider = geminiKey ? 'gemini' : 'nvidia'
     const language = request.headers['x-report-language'] || 'English'
+    const cnnCategory = cnnCategories.has(request.headers['x-cnn-category']) ? request.headers['x-cnn-category'] : 'General Commodity'
     const barcode = request.headers['x-barcode'] || ''
     const qrContent = request.headers['x-qr-content'] ? decodeURIComponent(request.headers['x-qr-content']) : ''
     const suppliedCodes = barcode || qrContent ? `\nMachine-readable evidence supplied by the scanner: barcode=${barcode || 'none'}; QR=${qrContent || 'none'}. Preserve these values exactly and do not invent replacements.` : ''
-    const prompt = localizedPrompt(language) + suppliedCodes
+    const prompt = `${localizedPrompt(language)}\nA lightweight CNN pre-classifier suggested the weak category hint "${cnnCategory}". Use it only as a hint and override it when visible label evidence disagrees.${suppliedCodes}`
     const report = geminiKey ? await analyzeWithGemini(imageData, prompt) : await analyzeWithNvidia(imageData, prompt)
-    return sendJson(response, 200, { provider, ...normalizeReport(report, { barcode, qrContent }) })
+    return sendJson(response, 200, { provider, cnnCategory, ...normalizeReport(report, { barcode, qrContent }) })
   } catch (error) {
     return sendJson(response, 502, { error: error instanceof Error ? error.message : 'The inspection service could not analyze this image.' })
   }
@@ -171,6 +172,7 @@ const parseJsonBody = async (request) => {
 }
 
 const langCodeMap = { 'தமிழ்': 'ta', 'हिन्दी': 'hi', English: 'en' }
+const cnnCategories = new Set(['Food', 'Cosmetic', 'Medicine', 'Electronic', 'General Commodity'])
 
 const voiceReport = async (request, response) => {
   if (!elevenLabsKey) return sendJson(response, 503, { error: 'ELEVENLABS_API_KEY is not configured on the backend.' })
