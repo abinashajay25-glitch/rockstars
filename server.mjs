@@ -150,7 +150,7 @@ const analyzeWithNvidia = async (imageData, prompt) => {
   const upstream = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${nvidiaKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: nvidiaModel, temperature: 0.1, max_tokens: 2400, response_format: { type: 'json_object' }, messages: [{ role: 'user', content: [{ type: 'text', text: `${prompt}\nReturn one JSON object only. Keep every array to four items or fewer and every explanation under 120 characters.` }, { type: 'image_url', image_url: { url: `data:${imageData.type};base64,${imageData.base64}` } }] }] }),
+    body: JSON.stringify({ model: nvidiaModel, temperature: 0.1, max_tokens: 2400, messages: [{ role: 'user', content: [{ type: 'text', text: `${prompt}\nReturn one JSON object only. Do not use markdown fences. Keep every array to four items or fewer and every explanation under 120 characters.` }, { type: 'image_url', image_url: { url: `data:${imageData.type};base64,${imageData.base64}` } }] }] }),
   })
   const payload = await readUpstreamJson(upstream, 'NVIDIA')
   return cleanJson(payload.choices?.[0]?.message?.content)
@@ -164,7 +164,7 @@ const runCnnOcrVision = async ({ imageData, language, barcode, qrContent, provid
 }
 
 const analyze = async (request, response) => {
-  if (!geminiKey && !nvidiaKey) return sendJson(response, 503, { error: 'No vision model is configured. In Render, add NVIDIA_API_KEY with your nvapi key, then redeploy the service.' })
+  if (!geminiKey && !nvidiaKey) return sendJson(response, 503, { error: 'No vision model is configured. Add GEMINI_API_KEY or NVIDIA_API_KEY in Render, then redeploy the service.' })
   try {
     const { image, imageType } = await parseMultipartImage(request)
     const imageData = { type: imageType, base64: image.toString('base64') }
@@ -210,6 +210,12 @@ const voiceReport = async (request, response) => {
   } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : 'Invalid voice report request.' }) }
 }
 
+const health = (_request, response) => sendJson(response, 200, {
+  status: 'ok',
+  analysisProviderConfigured: Boolean(geminiKey || nvidiaKey),
+  voiceProviderConfigured: Boolean(elevenLabsKey),
+})
+
 const contentTypes = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' }
 const serveFile = async (request, response) => {
   const requestPath = new URL(request.url, 'http://localhost').pathname === '/' ? '/index.html' : new URL(request.url, 'http://localhost').pathname
@@ -221,6 +227,7 @@ const serveFile = async (request, response) => {
 createServer((request, response) => {
   if (request.method === 'POST' && request.url === '/api/analyze') return analyze(request, response)
   if (request.method === 'POST' && request.url === '/api/voice-report') return voiceReport(request, response)
+  if (request.method === 'GET' && request.url === '/api/health') return health(request, response)
   if (request.method === 'GET') return serveFile(request, response)
   response.writeHead(405); response.end('Method not allowed')
 }).listen(port, () => console.log(`Lens compliance service running at http://localhost:${port}`))
