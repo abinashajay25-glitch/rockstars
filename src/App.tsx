@@ -115,12 +115,18 @@ function App() {
     } catch (reason) { setAnalysis(null); setError(reason instanceof Error ? reason.message : text.unavailable) } finally { setIsAnalyzing(false) }
   }
   const reportText = useMemo(() => analysis ? `${text.report}. ${analysis.productName}, ${analysis.category}, brand ${analysis.brand}. ${analysis.summary} Product information: ${Object.entries(analysis.extractedInfo).map(([key, value]) => `${key} ${Array.isArray(value) ? value.join(', ') : value}`).join('. ')} Compliance score ${analysis.complianceScore} percent. Status ${analysis.complianceStatus}. Findings: ${analysis.report.findings.join('. ')} Violations: ${analysis.violations.map((item) => `${item.name}. Reason: ${item.reason}`).join('. ')} Warnings: ${analysis.warnings.join('. ')} Actions: ${analysis.report.actions.join('. ')} Market recommendation: ${analysis.market.recommendations.join('. ')}` : '', [analysis, text.report])
-  const imageDataUrl = async (source: File) => new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result))
-    reader.onerror = () => reject(new Error('The uploaded image could not be added to the PDF.'))
-    reader.readAsDataURL(source)
-  })
+  const pdfImageDataUrl = async (source: File) => {
+    const sourceUrl = URL.createObjectURL(source)
+    const image = new Image()
+    try {
+      await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = reject; image.src = sourceUrl })
+      const canvas = document.createElement('canvas')
+      const scale = Math.min(1, 1400 / Math.max(image.naturalWidth, image.naturalHeight))
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale)); canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))
+      canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height)
+      return canvas.toDataURL('image/jpeg', 0.86)
+    } finally { URL.revokeObjectURL(sourceUrl) }
+  }
   const downloadPdf = async () => {
     if (!analysis) return
     const pdf = new jsPDF()
@@ -153,7 +159,7 @@ function App() {
     drawHeader('01 / INSPECTION')
     pdf.setTextColor(...accent); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(20); pdf.text(analysis.productName, margin, 45)
     pdf.setTextColor(190, 190, 184); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.text(lines(`Company: ${analysis.brand}\nCategory: ${analysis.category}\nInspection date: ${date}\n\n${analysis.summary}`), margin, 53)
-    if (file) { try { pdf.addImage(await imageDataUrl(file), file.type === 'image/png' ? 'PNG' : 'JPEG', margin, 62, 180, 72, undefined, 'MEDIUM') } catch { /* Keep the text report if the browser cannot encode the image. */ } }
+    if (file) { try { pdf.addImage(await pdfImageDataUrl(file), 'JPEG', margin, 62, 180, 72, undefined, 'MEDIUM') } catch { /* Keep the text report if the browser cannot encode the image. */ } }
     let y = 145
     y = writeSection('CNN + OCR + AI VISION PIPELINE', pipeline, y)
     y = writeSection('MACHINE-READABLE EVIDENCE', `Barcode: ${analysis.barcodeInfo.value || 'Not detected'}\nQR: ${analysis.qrInfo.content || 'Not detected'}\nVerification: ${analysis.qrInfo.verificationStatus}`, y + 4)
@@ -179,7 +185,6 @@ function App() {
     downloadLink.download = `${analysis.productName.replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'inspection'}-report.pdf`
     downloadLink.click()
     window.open(pdfUrl, '_blank', 'noopener,noreferrer')
-    window.setTimeout(() => URL.revokeObjectURL(pdfUrl), 60_000)
   }
   const speakReport = async () => {
     if (!reportText) return

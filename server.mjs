@@ -98,6 +98,13 @@ const isPlaceholder = (value) => {
 }
 
 const cleanString = (value, fallback = '') => isPlaceholder(value) ? fallback : String(value || fallback)
+const readUpstreamJson = async (upstream, provider) => {
+  const responseText = await upstream.text()
+  let payload
+  try { payload = JSON.parse(responseText) } catch { throw new Error(`${provider} returned HTTP ${upstream.status} with a non-JSON response.`) }
+  if (!upstream.ok) throw new Error(`${provider} returned HTTP ${upstream.status}: ${payload.error?.message || payload.detail || payload.message || 'request rejected'}`)
+  return payload
+}
 const defaultExtractedInfo = { mrp: 'UNKNOWN', netQuantity: 'UNKNOWN', batchLot: 'UNKNOWN', manufacturingDate: 'UNKNOWN', expiryBestBefore: 'UNKNOWN', manufacturer: 'UNKNOWN', manufacturerAddress: 'UNKNOWN', consumerCare: 'UNKNOWN', countryOfOrigin: 'UNKNOWN', otherDeclarations: [] }
 const defaultMarket = { observedPrice: 'Not visible', pricePerUnit: 'Not available', brandVerification: 'REVIEW', comparisons: [], recommendations: [] }
 const defaultConfidence = { productDetection: 'LOW', ocr: 'LOW', codeDetection: 'LOW', compliance: 'LOW', overall: 'LOW' }
@@ -135,8 +142,7 @@ const analyzeWithGemini = async (imageData, prompt) => {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: imageData.type, data: imageData.base64 } }] }], generationConfig: { temperature: 0.1, maxOutputTokens: 2400, responseMimeType: 'application/json' } }),
   })
-  const payload = await upstream.json()
-  if (!upstream.ok) throw new Error(payload.error?.message || 'Gemini image analysis failed.')
+  const payload = await readUpstreamJson(upstream, 'Gemini')
   return cleanJson(payload.candidates?.[0]?.content?.parts?.[0]?.text)
 }
 
@@ -146,8 +152,7 @@ const analyzeWithNvidia = async (imageData, prompt) => {
     headers: { Authorization: `Bearer ${nvidiaKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: nvidiaModel, temperature: 0.1, max_tokens: 2400, response_format: { type: 'json_object' }, messages: [{ role: 'user', content: [{ type: 'text', text: `${prompt}\nReturn one JSON object only. Keep every array to four items or fewer and every explanation under 120 characters.` }, { type: 'image_url', image_url: { url: `data:${imageData.type};base64,${imageData.base64}` } }] }] }),
   })
-  const payload = await upstream.json()
-  if (!upstream.ok) throw new Error(payload.error?.message || 'NVIDIA image analysis failed.')
+  const payload = await readUpstreamJson(upstream, 'NVIDIA')
   return cleanJson(payload.choices?.[0]?.message?.content)
 }
 
@@ -167,8 +172,20 @@ const analyze = async (request, response) => {
     const language = request.headers['x-report-language'] || 'English'
     const barcode = request.headers['x-barcode'] || ''
     const qrContent = request.headers['x-qr-content'] ? decodeURIComponent(request.headers['x-qr-content']) : ''
-    const report = await runCnnOcrVision({ imageData, language, barcode, qrContent, provider })
-    return sendJson(response, 200, { provider, pipeline: 'cnn+ocr+ai-vision', ...report })
+    try {
+      const report = await runCnnOcrVision({ imageData, language, barcode, qrContent, provider })
+      return sendJson(response, 200, { provider, pipeline: 'cnn+ocr+ai-vision', ...report })
+    } catch (primaryError) {
+      const fallbackProvider = provider === 'gemini' ? 'nvidia' : 'gemini'
+      const fallbackKeyAvailable = fallbackProvider === 'gemini' ? Boolean(geminiKey) : Boolean(nvidiaKey)
+      if (!fallbackKeyAvailable) throw primaryError
+      try {
+        const report = await runCnnOcrVision({ imageData, language, barcode, qrContent, provider: fallbackProvider })
+        return sendJson(response, 200, { provider: fallbackProvider, fallbackFrom: provider, pipeline: 'cnn+ocr+ai-vision', ...report })
+      } catch (fallbackError) {
+        throw new Error(`${provider} failed: ${primaryError instanceof Error ? primaryError.message : 'request failed'}; ${fallbackProvider} fallback failed: ${fallbackError instanceof Error ? fallbackError.message : 'request failed'}`)
+      }
+    }
   } catch (error) {
     return sendJson(response, 502, { error: error instanceof Error ? error.message : 'The inspection service could not analyze this image.' })
   }
