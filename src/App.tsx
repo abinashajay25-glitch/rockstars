@@ -8,6 +8,7 @@ type ComplianceItem = { label: string; status: 'PASS' | 'FAIL' | 'REVIEW'; value
 type Analysis = {
   provider?: string; pipeline?: string; productName: string; category: string; brand: string; summary: string
   visionPipeline?: { cnn: { status: string; labelDetected: boolean; legibility: string; regions: string[]; notes: string[] }; ocr: { status: string; text: string; fieldsDetected: string[] }; aiVision: { status: string; evidence: string[]; reasoning: string } }
+
   barcodeInfo: { detected: boolean; value: string; productName: string; brand: string; category: string; status: string }
   qrInfo: { detected: boolean; content: string; type: string; verificationStatus: string }
   extractedInfo: Record<string, string | string[]>; complianceScore: number
@@ -28,6 +29,7 @@ const copy: Record<Language, Copy> = {
   'हिन्दी': { navScan: 'स्कैन', navValidator: 'सत्यापन', navIntel: 'जानकारी', lang: 'भाषा', kicker: 'मिशन पूरा / सम्मान +99', heroText: 'सुरक्षित विकल्पों, स्पष्ट लेबल और बेहतर मूल्य निर्णयों के लिए AI पैकेज्ड उत्पाद निरीक्षण।', launch: 'स्कैनर शुरू करें', detect: 'पता लगाएं', validate: 'सत्यापित करें', analyze: 'विश्लेषण', report: 'रिपोर्ट', inspect: 'पैक किए गए उत्पाद की जांच', scannerText: 'साफ सामने या पीछे का लेबल इस्तेमाल करें। Lens OCR, बारकोड या QR जानकारी और विज़न रीजनिंग को जोड़ता है। अस्पष्ट लेबल पर दावा नहीं बनाया जाता।', camera: 'कैमरा स्कैन', upload: 'लेबल इमेज अपलोड करें', analyzeButton: 'पता लगाएं और सत्यापित करें', reading: 'लेबल पढ़ा जा रहा है...', reportEmpty: 'आपकी मिशन रिपोर्ट।', start: 'लेबल अपलोड या कैप्चर करके Detect → Validate → Analyze → Report शुरू करें।', pdf: 'रिपोर्ट देखें ↗', voice: 'रिपोर्ट सुनें', speaking: 'बोला जा रहा है...', unavailable: 'लाइव AI उपलब्ध नहीं है। सर्वर API कुंजी जांचें।', cameraError: 'कैमरा उपलब्ध नहीं है। अपलोड का उपयोग करें या ब्राउज़र में अनुमति दें।', capture: 'लेबल कैप्चर करें', inside: 'अंदर क्या है?', healthTech: 'स्वास्थ्य + तकनीकी जानकारी', market: 'बाज़ार की जानकारी', price: 'मूल्य संकेत', clarity: 'स्पष्टता', scale: 'पैमाने पर।', catalogText: 'उपभोक्ताओं, निरीक्षकों, खुदरा विक्रेताओं और प्रशासकों के लिए बहुभाषी AI विश्लेषण। हर रिपोर्ट अनिश्चितता को स्पष्ट रखती है।' },
 }
 
+
 function App() {
   const [file, setFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState('')
@@ -44,11 +46,13 @@ function App() {
   const [reportPage, setReportPage] = useState(1)
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
+
   const text = copy[language]
 
   useEffect(() => { if (!file) { setPreviewUrl(''); return }; const url = URL.createObjectURL(file); setPreviewUrl(url); return () => URL.revokeObjectURL(url) }, [file])
   useEffect(() => { try { setHistory(JSON.parse(localStorage.getItem('rockstar-lens-history') || '[]')) } catch { setHistory([]) } }, [])
   useEffect(() => () => streamRef.current?.getTracks().forEach((track) => track.stop()), [])
+
 
   const decodePackageCode = async (url: string) => {
     setCodeMessage('Detecting barcode or QR...')
@@ -86,6 +90,7 @@ function App() {
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error || text.unavailable)
       setAnalysis(payload)
+
       const entry: ScanHistoryItem = { id: crypto.randomUUID(), productName: payload.productName, timestamp: new Date().toISOString(), score: payload.complianceScore, status: payload.complianceStatus, violations: payload.violations.map((item: { name: string }) => item.name), analysis: payload }
       const nextHistory = [entry, ...history].slice(0, 20); setHistory(nextHistory); localStorage.setItem('rockstar-lens-history', JSON.stringify(nextHistory))
     } catch (reason) { setAnalysis(null); setError(reason instanceof Error ? reason.message : text.unavailable) } finally { setIsAnalyzing(false) }
@@ -131,6 +136,7 @@ function App() {
     y = writeSection('VIOLATIONS AND WARNINGS', `${violations}\nWarnings: ${analysis.warnings.join('; ') || 'None.'}`, y + 4)
     y = writeSection('HEALTH, MARKET, AND NEXT ACTIONS', `Ingredients: ${analysis.health.ingredients.join(', ') || 'Not available'}\nAllergens: ${analysis.health.allergens.join(', ') || 'None reported'}\nObserved price: ${analysis.market.observedPrice}\nRecommendations: ${analysis.market.recommendations.join('; ') || 'None.'}\nNext actions: ${analysis.report.actions.join('; ') || 'None.'}`, y + 4)
     writeSection('FINDINGS', analysis.report.findings.join('; ') || 'No additional findings.', y + 4)
+
     const pdfBlob = pdf.output('blob')
     const pdfUrl = URL.createObjectURL(pdfBlob)
     const downloadLink = document.createElement('a')
@@ -146,6 +152,7 @@ function App() {
     try { const response = await fetch('/api/voice-report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: reportText, language }) }); if (!response.ok) throw new Error('fallback'); const audio = new Audio(URL.createObjectURL(await response.blob())); audio.onended = () => setIsSpeaking(false); await audio.play() } catch { if (!('speechSynthesis' in window)) { setIsSpeaking(false); setError('Voice report is not supported in this browser.'); return }; const utterance = new SpeechSynthesisUtterance(reportText); utterance.lang = language === 'தமிழ்' ? 'ta-IN' : language === 'हिन्दी' ? 'hi-IN' : 'en-IN'; utterance.onend = () => setIsSpeaking(false); utterance.onerror = () => setIsSpeaking(false); window.speechSynthesis.cancel(); window.speechSynthesis.speak(utterance) }
   }
   const openHistory = (entry: ScanHistoryItem) => { setAnalysis(entry.analysis); window.location.hash = 'validator' }
+
   const compliantCount = history.filter((item) => item.status === 'COMPLIANT').length
   const reviewCount = history.filter((item) => item.status === 'NEEDS_REVIEW').length
   const nonCompliantCount = history.filter((item) => item.status === 'NON_COMPLIANT').length
@@ -166,3 +173,4 @@ function App() {
 }
 
 export default App
+
