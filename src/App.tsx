@@ -172,22 +172,22 @@ function App() {
     drawSection('Product and machine codes', [lines('Product', analysis.productName), lines('Brand', analysis.brand), lines('Category', analysis.category), lines('Barcode', analysis.barcodeInfo.value || 'Not detected'), lines('QR', analysis.qrInfo.content || 'Not detected'), lines('Verification', analysis.qrInfo.verificationStatus)].join('\n'), margin, y, columnWidth, 58)
     drawSection('AI confidence', Object.entries(analysis.aiConfidence).map(([key, item]) => lines(key, item)).join('\n'), margin + columnWidth + columnGap, y, columnWidth, 58)
     y += 64
-    drawSection('Package declarations', Object.entries(analysis.extractedInfo).map(([key, item]) => lines(key, item)).join('\n'), margin, y, contentWidth, 72)
-    y += 78
-    drawSection('Seven-point compliance', analysis.compliance.map((item) => `${item.status}  ${item.label}: ${item.value} [${item.confidence}]`).join('\n') || 'No compliance checks returned.', margin, y, contentWidth, 73)
+    drawSection('Package declarations', Object.entries(analysis.extractedInfo).map(([key, item]) => lines(key, item)).join('\n'), margin, y, contentWidth, 54)
+    y += 60
+    drawSection('Seven-point compliance', analysis.compliance.map((item) => `${item.status}  ${item.label}: ${item.value} [${item.confidence}]`).join('\n') || 'No compliance checks returned.', margin, y, contentWidth, 44)
 
     pdf.addPage(); drawHeader(2, 'Health, market and actions')
     y = 31
-    drawSection('Health intelligence', [`Ingredients: ${value(analysis.health.ingredients)}`, `Nutri-Score: ${value(analysis.health.nutriScore)}`, `Allergens: ${value(analysis.health.allergens)}`, `Additives: ${value(analysis.health.additives)}`].join('\n'), margin, y, columnWidth, 55)
-    drawSection('Technology specifications', `Specifications: ${value(analysis.technology.specifications)}`, margin + columnWidth + columnGap, y, columnWidth, 55)
-    y += 61
-    drawSection('Market intelligence', [lines('Observed price', analysis.market.observedPrice), lines('Price per unit', analysis.market.pricePerUnit), lines('Brand verification', analysis.market.brandVerification), `Comparisons: ${analysis.market.comparisons.map((item) => `${item.seller} / ${item.price} / ${item.unitPrice}`).join('; ') || 'None'}`, `Recommendations: ${value(analysis.market.recommendations)}`].join('\n'), margin, y, contentWidth, 58)
-    y += 64
-    drawSection('Violations and warnings', [`Violations: ${analysis.violations.map((item) => `${item.name}: ${item.reason} (${item.confidence})`).join('; ') || 'None detected.'}`, `Warnings: ${value(analysis.warnings, 'None reported.')}`].join('\n'), margin, y, contentWidth, 63)
-    y += 69
-    drawSection('Findings and next actions', [`Findings: ${value(analysis.report.findings, 'No additional findings.')}`, `Actions: ${value(analysis.report.actions, 'No additional actions.')}`].join('\n'), margin, y, contentWidth, 65)
-    y += 71
-    drawSection('Report provenance', 'Generated from the uploaded package image, OCR, barcode or QR evidence, and AI label analysis. Unclear fields remain marked for review and should be verified against the physical package.', margin, y, contentWidth, 42)
+    drawSection('Health intelligence', [`Ingredients: ${value(analysis.health.ingredients)}`, `Nutri-Score: ${value(analysis.health.nutriScore)}`, `Allergens: ${value(analysis.health.allergens)}`, `Additives: ${value(analysis.health.additives)}`].join('\n'), margin, y, columnWidth, 45)
+    drawSection('Technology specifications', `Specifications: ${value(analysis.technology.specifications)}`, margin + columnWidth + columnGap, y, columnWidth, 45)
+    y += 51
+    drawSection('Market intelligence', [lines('Observed price', analysis.market.observedPrice), lines('Price per unit', analysis.market.pricePerUnit), lines('Brand verification', analysis.market.brandVerification), `Comparisons: ${analysis.market.comparisons.map((item) => `${item.seller} / ${item.price} / ${item.unitPrice}`).join('; ') || 'None'}`, `Recommendations: ${value(analysis.market.recommendations)}`].join('\n'), margin, y, contentWidth, 48)
+    y += 54
+    drawSection('Violations and warnings', [`Violations: ${analysis.violations.map((item) => `${item.name}: ${item.reason} (${item.confidence})`).join('; ') || 'None detected.'}`, `Warnings: ${value(analysis.warnings, 'None reported.')}`].join('\n'), margin, y, contentWidth, 48)
+    y += 54
+    drawSection('Findings and next actions', [`Findings: ${value(analysis.report.findings, 'No additional findings.')}`, `Actions: ${value(analysis.report.actions, 'No additional actions.')}`].join('\n'), margin, y, contentWidth, 45)
+    y += 51
+    drawSection('Report provenance', 'Generated from the uploaded package image, OCR, barcode or QR evidence, and AI label analysis. Unclear fields remain marked for review and should be verified against the physical package.', margin, y, contentWidth, 35)
     const pdfBlob = pdf.output('blob')
     const pdfUrl = URL.createObjectURL(pdfBlob)
     const downloadLink = document.createElement('a')
