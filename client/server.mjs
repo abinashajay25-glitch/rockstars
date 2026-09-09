@@ -170,12 +170,18 @@ const parseJsonBody = async (request) => {
   return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
 }
 
+const langCodeMap = { 'தமிழ்': 'ta', 'हिन्दी': 'hi', English: 'en' }
+
 const voiceReport = async (request, response) => {
   if (!elevenLabsKey) return sendJson(response, 503, { error: 'ELEVENLABS_API_KEY is not configured on the backend.' })
   try {
-    const { text } = await parseJsonBody(request)
+    const { text, language } = await parseJsonBody(request)
     if (!text) return sendJson(response, 400, { error: 'Report text is required.' })
-    const upstream = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${elevenLabsVoice}`, { method: 'POST', headers: { 'xi-api-key': elevenLabsKey, 'Content-Type': 'application/json', Accept: 'audio/mpeg' }, body: JSON.stringify({ text: String(text).slice(0, 5000), model_id: 'eleven_multilingual_v2' }) })
+    const langCode = langCodeMap[language] || 'en'
+    const voiceId = elevenLabsVoice
+    const ttsBody = { text: String(text).slice(0, 5000), model_id: 'eleven_multilingual_v2' }
+    if (langCode !== 'en') ttsBody.language_code = langCode
+    const upstream = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, { method: 'POST', headers: { 'xi-api-key': elevenLabsKey, 'Content-Type': 'application/json', Accept: 'audio/mpeg' }, body: JSON.stringify(ttsBody) })
     if (!upstream.ok) return sendJson(response, upstream.status, { error: 'ElevenLabs voice generation failed.' })
     response.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' })
     response.end(Buffer.from(await upstream.arrayBuffer()))
