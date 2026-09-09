@@ -19,6 +19,12 @@ const sendJson = (response, status, body) => {
   response.end(JSON.stringify(body))
 }
 
+const readJsonResponse = async (response) => {
+  const body = await response.text()
+  if (!body.trim()) throw new Error(`The vision provider returned an empty response (${response.status}).`)
+  try { return JSON.parse(body) } catch { throw new Error(`The vision provider returned invalid JSON (${response.status}).`) }
+}
+
 const parseMultipartImage = async (request) => {
   const chunks = []
   let size = 0
@@ -130,7 +136,7 @@ const analyzeWithGemini = async (imageData, prompt) => {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: imageData.type, data: imageData.base64 } }] }], generationConfig: { temperature: 0.1, responseMimeType: 'application/json' } }),
   })
-  const payload = await upstream.json()
+  const payload = await readJsonResponse(upstream)
   if (!upstream.ok) throw new Error(payload.error?.message || 'Gemini image analysis failed.')
   return cleanJson(payload.candidates?.[0]?.content?.parts?.[0]?.text)
 }
@@ -141,7 +147,7 @@ const analyzeWithNvidia = async (imageData, prompt) => {
     headers: { Authorization: `Bearer ${nvidiaKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: nvidiaModel, temperature: 0.1, max_tokens: 1800, response_format: { type: 'json_object' }, messages: [{ role: 'user', content: [{ type: 'text', text: `${prompt}\nReturn one JSON object only. Do not add markdown or explanatory text.` }, { type: 'image_url', image_url: { url: `data:${imageData.type};base64,${imageData.base64}` } }] }] }),
   })
-  const payload = await upstream.json()
+  const payload = await readJsonResponse(upstream)
   if (!upstream.ok) throw new Error(payload.error?.message || 'NVIDIA image analysis failed.')
   return cleanJson(payload.choices?.[0]?.message?.content)
 }

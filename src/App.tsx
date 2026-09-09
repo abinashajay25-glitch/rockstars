@@ -20,6 +20,12 @@ type Analysis = {
 type Language = 'English' | 'தமிழ்' | 'हिन्दी'
 type ScanHistoryItem = { id: string; productName: string; timestamp: string; score: number; status: Analysis['complianceStatus']; violations: string[]; analysis: Analysis }
 
+const readJsonResponse = async (response: Response) => {
+  const body = await response.text()
+  if (!body.trim()) throw new Error(`The inspection service returned an empty response (${response.status}). Please try again.`)
+  try { return JSON.parse(body) as Record<string, any> } catch { throw new Error(`The inspection service returned invalid JSON (${response.status}). Please try again.`) }
+}
+
 type Copy = { navScan: string; navValidator: string; navIntel: string; lang: string; kicker: string; heroText: string; launch: string; detect: string; validate: string; analyze: string; report: string; inspect: string; scannerText: string; camera: string; upload: string; analyzeButton: string; reading: string; reportEmpty: string; start: string; pdf: string; voice: string; speaking: string; unavailable: string; cameraError: string; capture: string; inside: string; healthTech: string; market: string; price: string; clarity: string; scale: string; catalogText: string }
 const copy: Record<Language, Copy> = {
   English: { navScan: 'Scan', navValidator: 'Validator', navIntel: 'Intel', lang: 'LANG', kicker: 'MISSION PASSED / RESPECT +99', heroText: 'AI-powered packaged commodity inspection for safer choices, clearer labels, and smarter price decisions.', launch: 'Launch scanner', detect: 'Detect', validate: 'Validate', analyze: 'Analyze', report: 'Report', inspect: 'Inspect a packaged product', scannerText: 'Use a clear front or back label. Lens combines OCR, barcode or QR evidence, and vision reasoning. No product claim is invented when the label is unclear.', camera: 'Camera scan', upload: 'Upload label image', analyzeButton: 'Detect and validate', reading: 'Reading label...', reportEmpty: 'Your mission readout.', start: 'Upload or capture a label to start Detect → Validate → Analyze → Report.', pdf: 'View report ↗', voice: 'Read report aloud', speaking: 'Speaking...', unavailable: 'Live model unavailable. Check the server provider keys.', cameraError: 'Camera access is unavailable. Use upload instead, or allow camera access in your browser.', capture: 'Capture label', inside: 'What is inside?', healthTech: 'Health + tech intelligence', market: 'Market intelligence', price: 'Price signal', clarity: 'Clarity', scale: 'at scale.', catalogText: 'Multilingual AI analysis for consumers, inspectors, retailers, and administrators. Every report keeps uncertainty visible and every decision traceable.' },
@@ -114,7 +120,7 @@ function App() {
       if (decodedCode?.type === 'BARCODE') headers['x-barcode'] = decodedCode.value
       if (decodedCode?.type === 'QR') headers['x-qr-content'] = encodeURIComponent(decodedCode.value)
       const response = await fetch('/api/analyze', { method: 'POST', headers, body })
-      const payload = await response.json()
+      const payload = await readJsonResponse(response) as Analysis & { error?: string }
       if (!response.ok) throw new Error(payload.error || text.unavailable)
       setAnalysis(payload)
       const entry: ScanHistoryItem = { id: crypto.randomUUID(), productName: payload.productName, timestamp: new Date().toISOString(), score: payload.complianceScore, status: payload.complianceStatus, violations: payload.violations.map((item: { name: string }) => item.name), analysis: payload }
@@ -130,22 +136,58 @@ function App() {
   })
   const downloadPdf = async () => {
     if (!analysis) return
-    const pdf = new jsPDF()
-    const packageInfo = Object.entries(analysis.extractedInfo).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`).join('\n')
-    const violations = analysis.violations.map((item) => `${item.name}: ${item.reason} (${item.confidence})`).join('\n') || 'None detected'
+    const pdf = new jsPDF({ unit: 'mm', format: 'a4' })
+    const pageWidth = 210
+    const margin = 14
+    const contentWidth = pageWidth - margin * 2
     const date = new Date().toLocaleString()
-    const addPage = (title: string, body: string) => { pdf.addPage(); pdf.setTextColor(10, 10, 9); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(18); pdf.text(title, 15, 20); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10); pdf.text(pdf.splitTextToSize(body, 180), 15, 32) }
-    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(18); pdf.text(text.report, 15, 20); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10); pdf.text(pdf.splitTextToSize(`Inspection Summary\n${analysis.summary}\n\nInspection date\n${date}`, 180), 15, 32)
-    if (file) { try { pdf.addImage(await imageDataUrl(file), 'JPEG', 15, 75, 180, 105, undefined, 'MEDIUM') } catch { /* Keep the text report if the browser cannot encode the image. */ } }
-    addPage('Product Information', `Product: ${analysis.productName}\nBrand: ${analysis.brand}\nCategory: ${analysis.category}`)
-    addPage('Barcode / QR Information', `Barcode: ${analysis.barcodeInfo.value || 'Not detected'}\nQR: ${analysis.qrInfo.content || 'Not detected'}\nVerification: ${analysis.qrInfo.verificationStatus}`)
-    addPage('Extracted Package Information', packageInfo)
-    addPage('Compliance', `Score: ${analysis.complianceScore}%\nStatus: ${analysis.complianceStatus}\nAI confidence: ${analysis.aiConfidence.overall}\n${analysis.compliance.map((item) => `${item.label}: ${item.status} - ${item.value}`).join('\n')}`)
-    addPage('Detected Violations', violations)
-    addPage('Warnings and Explanations', `${analysis.warnings.join('\n') || 'None'}\n\n${analysis.violations.map((item) => `${item.name}: ${item.reason}`).join('\n') || 'No violations detected.'}`)
-    const officialSearches = [`https://www.google.com/search?q=${encodeURIComponent(`${analysis.brand} ${analysis.productName} official website`)}`, `https://www.google.com/search?q=${encodeURIComponent(`${analysis.brand} ${analysis.productName} official price`)}`, `https://www.google.com/search?q=${encodeURIComponent(`${analysis.brand} ${analysis.productName} official models`)}`]
-    addPage('Market and Official Sources', `Observed price: ${analysis.market.observedPrice}\nUnit price: ${analysis.market.pricePerUnit}\n\nOfficial-source searches (verify before relying on them):\n${officialSearches.join('\n')}`)
-    addPage('Inspection Notes', `${analysis.report.findings.join('\n') || 'No additional findings.'}\n\nNext actions:\n${analysis.report.actions.join('\n') || 'No additional actions.'}`)
+    const value = (item: string | string[] | undefined, fallback = 'Not available') => Array.isArray(item) ? item.join(', ') || fallback : item || fallback
+    const lines = (label: string, item: string | string[] | undefined) => `${label}: ${value(item)}`
+    const drawHeader = (pageNumber: number, title: string) => {
+      pdf.setFillColor(10, 10, 9); pdf.rect(0, 0, pageWidth, 24, 'F')
+      pdf.setTextColor(223, 255, 57); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(15); pdf.text('ROCKSTAR LENS', margin, 15)
+      pdf.setTextColor(232, 230, 223); pdf.setFontSize(9); pdf.text(title.toUpperCase(), pageWidth - margin, 15, { align: 'right' })
+      pdf.setTextColor(110, 110, 104); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.text(`Mission report / ${pageNumber} of 2`, margin, 291); pdf.text(date, pageWidth - margin, 291, { align: 'right' })
+    }
+    const drawSection = (title: string, body: string, x: number, y: number, width: number, maxHeight: number) => {
+      const bodyLines = pdf.splitTextToSize(body, width - 8)
+      const height = Math.min(maxHeight, Math.max(16, 9 + bodyLines.length * 4.1))
+      pdf.setFillColor(245, 244, 238); pdf.roundedRect(x, y, width, height, 2, 2, 'F')
+      pdf.setTextColor(241, 93, 48); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8); pdf.text(title.toUpperCase(), x + 4, y + 6)
+      pdf.setTextColor(35, 35, 31); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.text(bodyLines.slice(0, Math.floor((height - 11) / 4.1)), x + 4, y + 12, { lineHeightFactor: 1.15 })
+      return height
+    }
+    drawHeader(1, 'Compliance intelligence')
+    pdf.setTextColor(10, 10, 9); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(21); pdf.text(pdf.splitTextToSize(analysis.productName, 120), margin, 38)
+    pdf.setTextColor(95, 95, 88); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.text(`${analysis.brand} / ${analysis.category}`, margin, 48)
+    pdf.setFillColor(223, 255, 57); pdf.roundedRect(154, 31, 42, 24, 3, 3, 'F'); pdf.setTextColor(10, 10, 9); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(18); pdf.text(`${analysis.complianceScore}%`, 175, 43, { align: 'center' }); pdf.setFontSize(6.5); pdf.text(analysis.complianceStatus.replace('_', ' '), 175, 50, { align: 'center' })
+    let y = 61
+    if (file) { try { pdf.addImage(await imageDataUrl(file), 'JPEG', margin, y, 54, 42, undefined, 'MEDIUM') } catch { /* Continue with the text report when image encoding is unavailable. */ } }
+    const overviewX = file ? 76 : margin
+    const overviewWidth = file ? 120 : contentWidth
+    drawSection('Inspection summary', analysis.summary, overviewX, y, overviewWidth, 44)
+    y += 49
+    const columnGap = 6
+    const columnWidth = (contentWidth - columnGap) / 2
+    drawSection('Product and machine codes', [lines('Product', analysis.productName), lines('Brand', analysis.brand), lines('Category', analysis.category), lines('Barcode', analysis.barcodeInfo.value || 'Not detected'), lines('QR', analysis.qrInfo.content || 'Not detected'), lines('Verification', analysis.qrInfo.verificationStatus)].join('\n'), margin, y, columnWidth, 58)
+    drawSection('AI confidence', Object.entries(analysis.aiConfidence).map(([key, item]) => lines(key, item)).join('\n'), margin + columnWidth + columnGap, y, columnWidth, 58)
+    y += 64
+    drawSection('Package declarations', Object.entries(analysis.extractedInfo).map(([key, item]) => lines(key, item)).join('\n'), margin, y, contentWidth, 72)
+    y += 78
+    drawSection('Seven-point compliance', analysis.compliance.map((item) => `${item.status}  ${item.label}: ${item.value} [${item.confidence}]`).join('\n') || 'No compliance checks returned.', margin, y, contentWidth, 73)
+
+    pdf.addPage(); drawHeader(2, 'Health, market and actions')
+    y = 31
+    drawSection('Health intelligence', [`Ingredients: ${value(analysis.health.ingredients)}`, `Nutri-Score: ${value(analysis.health.nutriScore)}`, `Allergens: ${value(analysis.health.allergens)}`, `Additives: ${value(analysis.health.additives)}`].join('\n'), margin, y, columnWidth, 55)
+    drawSection('Technology specifications', `Specifications: ${value(analysis.technology.specifications)}`, margin + columnWidth + columnGap, y, columnWidth, 55)
+    y += 61
+    drawSection('Market intelligence', [lines('Observed price', analysis.market.observedPrice), lines('Price per unit', analysis.market.pricePerUnit), lines('Brand verification', analysis.market.brandVerification), `Comparisons: ${analysis.market.comparisons.map((item) => `${item.seller} / ${item.price} / ${item.unitPrice}`).join('; ') || 'None'}`, `Recommendations: ${value(analysis.market.recommendations)}`].join('\n'), margin, y, contentWidth, 58)
+    y += 64
+    drawSection('Violations and warnings', [`Violations: ${analysis.violations.map((item) => `${item.name}: ${item.reason} (${item.confidence})`).join('; ') || 'None detected.'}`, `Warnings: ${value(analysis.warnings, 'None reported.')}`].join('\n'), margin, y, contentWidth, 63)
+    y += 69
+    drawSection('Findings and next actions', [`Findings: ${value(analysis.report.findings, 'No additional findings.')}`, `Actions: ${value(analysis.report.actions, 'No additional actions.')}`].join('\n'), margin, y, contentWidth, 65)
+    y += 71
+    drawSection('Report provenance', 'Generated from the uploaded package image, OCR, barcode or QR evidence, and AI label analysis. Unclear fields remain marked for review and should be verified against the physical package.', margin, y, contentWidth, 42)
     const pdfBlob = pdf.output('blob')
     const pdfUrl = URL.createObjectURL(pdfBlob)
     const downloadLink = document.createElement('a')
