@@ -51,7 +51,7 @@ const parseMultipartImage = async (request) => {
 
 const schemaPrompt = `You are an AI packaged commodity compliance inspector. Inspect the package image and return ONLY valid JSON matching this shape:
 {"productName":"string","category":"string","brand":"string","summary":"string","barcodeInfo":{"detected":true,"value":"string","productName":"string","brand":"string","category":"string","status":"FOUND|NOT_FOUND|NOT_PROVIDED"},"qrInfo":{"detected":true,"content":"string","type":"URL|TEXT|NOT_FOUND","verificationStatus":"SAFE_TO_REVIEW|DO_NOT_OPEN_AUTOMATICALLY|NOT_FOUND"},"extractedInfo":{"mrp":"string","netQuantity":"string","batchLot":"string","manufacturingDate":"string","expiryBestBefore":"string","manufacturer":"string","manufacturerAddress":"string","consumerCare":"string","countryOfOrigin":"string","otherDeclarations":["string"]},"complianceScore":72,"complianceStatus":"COMPLIANT|NEEDS_REVIEW|NON_COMPLIANT","aiConfidence":{"productDetection":"HIGH|MEDIUM|LOW","ocr":"HIGH|MEDIUM|LOW","codeDetection":"HIGH|MEDIUM|LOW","compliance":"HIGH|MEDIUM|LOW","overall":"HIGH|MEDIUM|LOW"},"compliance":[{"label":"MRP|Net Quantity|Mfg / Expiry Date|Manufacturer|Consumer Care|Country of Origin|Label Legibility|Batch / Lot","status":"PASS|FAIL|REVIEW","value":"string","confidence":"HIGH|MEDIUM|LOW"}],"violations":[{"name":"string","reason":"string","confidence":"HIGH|MEDIUM|LOW"}],"warnings":["string"],"health":{"ingredients":["string"],"nutriScore":"A|B|C|D|E|UNKNOWN","allergens":["string"],"additives":["string"]},"technology":{"specifications":["string"]},"market":{"observedPrice":"string","pricePerUnit":"string","brandVerification":"VERIFIED|UNVERIFIED|REVIEW","comparisons":[{"seller":"string","price":"string","unitPrice":"string"}],"recommendations":["string"]},"report":{"findings":["string"],"actions":["string"]}}
-Read only visible evidence. Use UNKNOWN or REVIEW when not legible. Never invent product details, prices, dates, manufacturers, certifications, or decoded code content. Calculate complianceScore from the checks. A missing or unclear mandatory declaration should be a violation or warning with a simple evidence-based reason. For non-food items, leave health arrays empty and use UNKNOWN for nutriScore.`
+Read only visible evidence. Use UNKNOWN or REVIEW when not legible. Never invent product details, prices, dates, manufacturers, certifications, or decoded code content. Calculate complianceScore from the checks. A missing or unclear mandatory declaration should be a violation or warning with a simple evidence-based reason. For food products, assess whether the label provides enough evidence that the product is edible, not edible, or needs review. Never claim a product is safe to eat from appearance alone; use NEEDS_REVIEW when safety, expiry, ingredients, or legibility is uncertain. For non-food items, set edibility to NOT_APPLICABLE and leave health arrays empty. Return health.edibility as EDIBLE, NOT_EDIBLE, NEEDS_REVIEW, or NOT_APPLICABLE.`
 
 const extractJsonObject = (content) => {
   const text = String(content || '').replace(/```(?:json)?/gi, '').replace(/```/g, '').trim()
@@ -91,7 +91,7 @@ const cleanJson = (content) => {
     brand: 'Not confirmed',
     summary: text || 'The model returned no readable inspection details.',
     compliance: [],
-    health: { ingredients: [], nutriScore: 'UNKNOWN', allergens: [], additives: [] },
+    health: { ingredients: [], nutriScore: 'UNKNOWN', allergens: [], additives: [], edibility: 'NEEDS_REVIEW' },
     technology: { specifications: [] },
     market: { observedPrice: 'Not visible', pricePerUnit: 'Not available', brandVerification: 'REVIEW', comparisons: [], recommendations: [] },
     report: { findings: ['The model response was returned as visible text rather than structured fields.'], actions: ['Review the label manually and run the inspection again if structured fields are needed.'] },
@@ -119,17 +119,17 @@ const normalizeReport = (report, suppliedCodes = {}) => ({
   compliance: Array.isArray(report.compliance) ? report.compliance : [],
   violations: Array.isArray(report.violations) ? report.violations.filter((item) => !isPlaceholder(item?.name) && !isPlaceholder(item?.reason)).map((item) => ({ name: cleanString(item.name, 'Unclear declaration'), reason: cleanString(item.reason, 'The declaration was not clearly visible.'), confidence: cleanString(item.confidence, 'LOW') })) : [],
   warnings: Array.isArray(report.warnings) ? report.warnings.filter((item) => !isPlaceholder(item)).map((item) => String(item)) : [],
-  health: report.health || { ingredients: [], nutriScore: 'UNKNOWN', allergens: [], additives: [] },
+  health: { ingredients: report.health?.ingredients || [], nutriScore: report.health?.nutriScore || 'UNKNOWN', allergens: report.health?.allergens || [], additives: report.health?.additives || [], edibility: report.health?.edibility || 'NEEDS_REVIEW' },
   technology: report.technology || { specifications: [] },
   market: report.market || { observedPrice: 'Not visible', pricePerUnit: 'Not available', brandVerification: 'REVIEW', comparisons: [], recommendations: [] },
   report: report.report || { findings: [], actions: [] },
 })
 
-const localizedPrompt = (language) => language === 'தமிழ்'
+const localizedPrompt = (language) => `${language === 'தமிழ்'
   ? `${schemaPrompt}\nWrite every human-readable value in Tamil.`
   : language === 'हिन्दी'
     ? `${schemaPrompt}\nWrite every human-readable value in Hindi.`
-    : schemaPrompt
+    : schemaPrompt}\nReturn health.edibility as EDIBLE, NOT_EDIBLE, NEEDS_REVIEW, or NOT_APPLICABLE. For non-food products use NOT_APPLICABLE; never infer edibility when the label evidence is unclear.`
 
 const analyzeWithGemini = async (imageData, prompt) => {
   const upstream = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiKey}`, {
