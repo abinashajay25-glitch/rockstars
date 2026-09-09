@@ -74,8 +74,14 @@ function App() {
   const [file, setFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState('')
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
-  const [language, setLanguage] = useState<Language>('English')
-  const [voiceLang, setVoiceLang] = useState<VoiceLang>('English')
+  const [language, setLanguage] = useState<Language>(() => {
+    const saved = localStorage.getItem('rockstar-lens-language')
+    return saved === 'தமிழ்' || saved === 'हिन्दी' ? saved : 'English'
+  })
+  const [voiceLang, setVoiceLang] = useState<VoiceLang>(() => {
+    const saved = localStorage.getItem('rockstar-lens-voice-language')
+    return saved === 'தமிழ்' || saved === 'हिन्दी' ? saved : 'English'
+  })
   const [error, setError] = useState('')
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [pipelineStep, setPipelineStep] = useState<PipelineStep>('idle')
@@ -94,6 +100,8 @@ function App() {
 
   useEffect(() => { if (!file) { setPreviewUrl(''); return }; const url = URL.createObjectURL(file); setPreviewUrl(url); return () => URL.revokeObjectURL(url) }, [file])
   useEffect(() => { try { setHistory(JSON.parse(localStorage.getItem('rockstar-lens-history') || '[]')) } catch { setHistory([]) } }, [])
+  useEffect(() => { localStorage.setItem('rockstar-lens-language', language) }, [language])
+  useEffect(() => { localStorage.setItem('rockstar-lens-voice-language', voiceLang) }, [voiceLang])
   useEffect(() => () => streamRef.current?.getTracks().forEach((track) => track.stop()), [])
 
   const decodePackageCode = async (url: string) => {
