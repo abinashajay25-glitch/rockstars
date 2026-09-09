@@ -73,23 +73,43 @@ const extractJsonObject = (content) => {
   return null
 }
 
+const modelContentToText = (content) => {
+  if (typeof content === 'string') return content.trim()
+  if (Array.isArray(content)) return content.map(modelContentToText).filter(Boolean).join('\n')
+  if (content && typeof content === 'object') {
+    if (typeof content.text === 'string') return content.text.trim()
+    if (typeof content.content === 'string' || Array.isArray(content.content)) return modelContentToText(content.content)
+  }
+  return JSON.stringify(content || '')
+}
+
+const textFallbackReport = (text) => ({
+  productName: 'Unidentified object',
+  category: 'Object not confirmed',
+  brand: 'Not visible',
+  summary: text || 'The image did not contain a readable packaged-product label.',
+  visionPipeline: {
+    cnn: { status: 'REVIEW', labelDetected: false, legibility: 'LOW', regions: [], notes: ['No readable packaged-product label was confirmed.'] },
+    ocr: { status: 'REVIEW', text: text || '', fieldsDetected: [] },
+    aiVision: { status: 'REVIEW', evidence: text ? [text] : [], reasoning: 'The provider returned narrative visual evidence instead of the requested field schema.' },
+  },
+  compliance: [],
+  health: { ingredients: [], nutriScore: 'UNKNOWN', allergens: [], additives: [] },
+  technology: { specifications: [] },
+  market: { observedPrice: 'Not visible', pricePerUnit: 'Not available', brandVerification: 'REVIEW', comparisons: [], recommendations: [] },
+  report: {
+    findings: ['The provider returned narrative visual evidence; structured label fields remain REVIEW.'],
+    actions: ['Capture a clear front or back package label and run the inspection again.'],
+  },
+})
+
 const cleanJson = (content) => {
-  const text = typeof content === 'string' ? content.trim() : JSON.stringify(content || '')
+  const text = modelContentToText(content)
   const json = extractJsonObject(text)
   if (json) {
     try { return JSON.parse(json) } catch { /* Fall through to an evidence-only report. */ }
   }
-  return {
-    productName: 'Image inspection',
-    category: 'Packaged commodity',
-    brand: 'Not confirmed',
-    summary: text || 'The model returned no readable inspection details.',
-    compliance: [],
-    health: { ingredients: [], nutriScore: 'UNKNOWN', allergens: [], additives: [] },
-    technology: { specifications: [] },
-    market: { observedPrice: 'Not visible', pricePerUnit: 'Not available', brandVerification: 'REVIEW', comparisons: [], recommendations: [] },
-    report: { findings: ['The model response was returned as visible text rather than structured fields.'], actions: ['Review the label manually and run the inspection again if structured fields are needed.'] },
-  }
+  return textFallbackReport(text)
 }
 
 const isPlaceholder = (value) => {
