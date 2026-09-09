@@ -171,7 +171,7 @@ const parseJsonBody = async (request) => {
   return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
 }
 
-const langCodeMap = { 'தமிழ்': 'ta', 'हिन्दी': 'hi', English: 'en' }
+const langCodeMap = { 'தமிழ்': 'tam', 'हिन्दी': 'hin', English: 'eng' }
 const cnnCategories = new Set(['Food', 'Cosmetic', 'Medicine', 'Electronic', 'General Commodity'])
 
 const voiceReport = async (request, response) => {
