@@ -29,6 +29,8 @@
 .report-page-buttons button { padding:10px 12px; border:1px solid var(--line); background:transparent; color:var(--muted); font:10px 'DM Mono',monospace; text-transform:uppercase; }
 .report-page-buttons button:hover,.report-page-buttons button.active { border-color:var(--acid); color:var(--acid); }
 .report-page-note { margin-top:14px; color:var(--muted); font:11px 'DM Mono',monospace; }
+.voice-language { display:flex; align-items:center; gap:7px; padding:0 10px; border:1px solid var(--orange); color:var(--ink); background:var(--orange); font:500 10px 'DM Mono',monospace; text-transform:uppercase; }
+.voice-language select { border:0; outline:0; background:transparent; color:var(--ink); font:500 10px 'DM Mono',monospace; text-transform:uppercase; }
 .history-section h2 { margin:0; color:var(--paper); font-size:clamp(52px,8vw,108px); line-height:.8; text-transform:uppercase; }
 .history-dashboard { align-self:center; }
 .history-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }

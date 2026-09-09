@@ -129,7 +129,7 @@ const localizedPrompt = (language) => language === 'தமிழ்'
 const analyzeWithGemini = async (imageData, prompt) => {
   const upstream = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiKey}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: imageData.type, data: imageData.base64 } }] }], generationConfig: { temperature: 0.1, responseMimeType: 'application/json' } }),
+    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: imageData.type, data: imageData.base64 } }] }], generationConfig: { temperature: 0.1, maxOutputTokens: 1400, responseMimeType: 'application/json' } }),
   })
   const payload = await upstream.json()
   if (!upstream.ok) throw new Error(payload.error?.message || 'Gemini image analysis failed.')
@@ -140,7 +140,7 @@ const analyzeWithNvidia = async (imageData, prompt) => {
   const upstream = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${nvidiaKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: nvidiaModel, temperature: 0.1, max_tokens: 1800, response_format: { type: 'json_object' }, messages: [{ role: 'user', content: [{ type: 'text', text: `${prompt}\nReturn one JSON object only. Do not add markdown or explanatory text.` }, { type: 'image_url', image_url: { url: `data:${imageData.type};base64,${imageData.base64}` } }] }] }),
+    body: JSON.stringify({ model: nvidiaModel, temperature: 0.1, max_tokens: 1400, response_format: { type: 'json_object' }, messages: [{ role: 'user', content: [{ type: 'text', text: `${prompt}\nReturn one JSON object only. Keep every array to four items or fewer and every explanation under 120 characters.` }, { type: 'image_url', image_url: { url: `data:${imageData.type};base64,${imageData.base64}` } }] }] }),
   })
   const payload = await upstream.json()
   if (!upstream.ok) throw new Error(payload.error?.message || 'NVIDIA image analysis failed.')
