@@ -139,6 +139,10 @@ function App() {
       const payload = await readJsonResponse(response) as Analysis & { error?: string }
       if (!response.ok) throw new Error(payload.error || text.unavailable)
       setAnalysis(payload)
+      if (payload.barcodeInfo?.detected) {
+        const details = [payload.barcodeInfo.productName, payload.barcodeInfo.brand, payload.barcodeInfo.category].filter(Boolean).join(' / ')
+        setCodeMessage(details ? `Barcode explained: ${details} (${payload.barcodeInfo.value})` : `Barcode decoded: ${payload.barcodeInfo.value}. Product details were not found in the lookup database.`)
+      }
       const entry: ScanHistoryItem = { id: crypto.randomUUID(), productName: payload.productName, timestamp: new Date().toISOString(), score: payload.complianceScore, status: payload.complianceStatus, violations: payload.violations.map((item: { name: string }) => item.name), analysis: payload }
       const nextHistory = [entry, ...history].slice(0, 20); setHistory(nextHistory); localStorage.setItem('rockstar-lens-history', JSON.stringify(nextHistory))
     } catch (reason) { setAnalysis(null); setError(reason instanceof Error ? reason.message : text.unavailable) } finally { setIsAnalyzing(false) }
