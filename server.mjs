@@ -100,26 +100,28 @@ const isPlaceholder = (value) => {
 const cleanString = (value, fallback = '') => isPlaceholder(value) ? fallback : String(value || fallback)
 const defaultExtractedInfo = { mrp: 'UNKNOWN', netQuantity: 'UNKNOWN', batchLot: 'UNKNOWN', manufacturingDate: 'UNKNOWN', expiryBestBefore: 'UNKNOWN', manufacturer: 'UNKNOWN', manufacturerAddress: 'UNKNOWN', consumerCare: 'UNKNOWN', countryOfOrigin: 'UNKNOWN', otherDeclarations: [] }
 const defaultMarket = { observedPrice: 'Not visible', pricePerUnit: 'Not available', brandVerification: 'REVIEW', comparisons: [], recommendations: [] }
+const defaultConfidence = { productDetection: 'LOW', ocr: 'LOW', codeDetection: 'LOW', compliance: 'LOW', overall: 'LOW' }
+const defaultVisionPipeline = { cnn: { status: 'REVIEW', labelDetected: false, legibility: 'LOW', regions: [], notes: [] }, ocr: { status: 'REVIEW', text: '', fieldsDetected: [] }, aiVision: { status: 'REVIEW', evidence: [], reasoning: 'Review the image manually.' } }
 
 const normalizeReport = (report, suppliedCodes = {}) => ({
   productName: cleanString(report.productName, 'Unidentified packaged commodity'),
   category: cleanString(report.category, 'Commodity'),
   brand: cleanString(report.brand, 'Not visible'),
   summary: cleanString(report.summary, 'The label was inspected against the seven-point compliance checklist.'),
-  visionPipeline: report.visionPipeline || { cnn: { status: 'REVIEW', labelDetected: false, legibility: 'LOW', regions: [], notes: ['Visual pipeline details were not returned.'] }, ocr: { status: 'REVIEW', text: '', fieldsDetected: [] }, aiVision: { status: 'REVIEW', evidence: [], reasoning: 'Review the image manually.' } },
+  visionPipeline: { ...defaultVisionPipeline, ...(report.visionPipeline || {}), cnn: { ...defaultVisionPipeline.cnn, ...(report.visionPipeline?.cnn || {}) }, ocr: { ...defaultVisionPipeline.ocr, ...(report.visionPipeline?.ocr || {}) }, aiVision: { ...defaultVisionPipeline.aiVision, ...(report.visionPipeline?.aiVision || {}) } },
   barcodeInfo: suppliedCodes.barcode ? { detected: true, value: suppliedCodes.barcode, productName: cleanString(report.barcodeInfo?.productName), brand: cleanString(report.barcodeInfo?.brand), category: cleanString(report.barcodeInfo?.category), status: 'FOUND' } : { detected: false, value: '', productName: '', brand: '', category: '', status: 'NOT_PROVIDED' },
   qrInfo: suppliedCodes.qrContent ? { detected: true, content: suppliedCodes.qrContent, type: /^https?:\/\//i.test(suppliedCodes.qrContent) ? 'URL' : 'TEXT', verificationStatus: /^https?:\/\//i.test(suppliedCodes.qrContent) ? 'DO_NOT_OPEN_AUTOMATICALLY' : 'SAFE_TO_REVIEW' } : { detected: false, content: '', type: 'NOT_FOUND', verificationStatus: 'NOT_FOUND' },
   extractedInfo: { ...defaultExtractedInfo, ...(report.extractedInfo || {}) },
-  complianceScore: Number.isFinite(Number(report.complianceScore)) ? Math.max(0, Math.min(100, Number(report.complianceScore))) : 0,
+  complianceScore: Number.isFinite(Number(report.complianceScore)) ? Math.max(0, Math.min(100, Number(report.complianceScore))) : null,
   complianceStatus: ['COMPLIANT', 'NEEDS_REVIEW', 'NON_COMPLIANT'].includes(report.complianceStatus) ? report.complianceStatus : 'NEEDS_REVIEW',
-  aiConfidence: report.aiConfidence || { productDetection: 'LOW', ocr: 'LOW', codeDetection: 'LOW', compliance: 'LOW', overall: 'LOW' },
+  aiConfidence: { ...defaultConfidence, ...(report.aiConfidence || {}) },
   compliance: Array.isArray(report.compliance) ? report.compliance : [],
   violations: Array.isArray(report.violations) ? report.violations.filter((item) => !isPlaceholder(item?.name) && !isPlaceholder(item?.reason)).map((item) => ({ name: cleanString(item.name, 'Unclear declaration'), reason: cleanString(item.reason, 'The declaration was not clearly visible.'), confidence: cleanString(item.confidence, 'LOW') })) : [],
   warnings: Array.isArray(report.warnings) ? report.warnings.filter((item) => !isPlaceholder(item)).map((item) => String(item)) : [],
-  health: report.health || { ingredients: [], nutriScore: 'UNKNOWN', allergens: [], additives: [] },
-  technology: report.technology || { specifications: [] },
+  health: { ingredients: [], nutriScore: 'UNKNOWN', allergens: [], additives: [], ...(report.health || {}) },
+  technology: { specifications: [], ...(report.technology || {}) },
   market: { ...defaultMarket, ...(report.market || {}) },
-  report: report.report || { findings: [], actions: [] },
+  report: { findings: [], actions: [], ...(report.report || {}) },
 })
 
 const localizedPrompt = (language) => language === 'தமிழ்'
@@ -131,7 +133,7 @@ const localizedPrompt = (language) => language === 'தமிழ்'
 const analyzeWithGemini = async (imageData, prompt) => {
   const upstream = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiKey}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: imageData.type, data: imageData.base64 } }] }], generationConfig: { temperature: 0.1, maxOutputTokens: 1400, responseMimeType: 'application/json' } }),
+    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: imageData.type, data: imageData.base64 } }] }], generationConfig: { temperature: 0.1, maxOutputTokens: 2400, responseMimeType: 'application/json' } }),
   })
   const payload = await upstream.json()
   if (!upstream.ok) throw new Error(payload.error?.message || 'Gemini image analysis failed.')
@@ -142,7 +144,7 @@ const analyzeWithNvidia = async (imageData, prompt) => {
   const upstream = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${nvidiaKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: nvidiaModel, temperature: 0.1, max_tokens: 1400, response_format: { type: 'json_object' }, messages: [{ role: 'user', content: [{ type: 'text', text: `${prompt}\nReturn one JSON object only. Keep every array to four items or fewer and every explanation under 120 characters.` }, { type: 'image_url', image_url: { url: `data:${imageData.type};base64,${imageData.base64}` } }] }] }),
+    body: JSON.stringify({ model: nvidiaModel, temperature: 0.1, max_tokens: 2400, response_format: { type: 'json_object' }, messages: [{ role: 'user', content: [{ type: 'text', text: `${prompt}\nReturn one JSON object only. Keep every array to four items or fewer and every explanation under 120 characters.` }, { type: 'image_url', image_url: { url: `data:${imageData.type};base64,${imageData.base64}` } }] }] }),
   })
   const payload = await upstream.json()
   if (!upstream.ok) throw new Error(payload.error?.message || 'NVIDIA image analysis failed.')
@@ -181,9 +183,10 @@ const parseJsonBody = async (request) => {
 const voiceReport = async (request, response) => {
   if (!elevenLabsKey) return sendJson(response, 503, { error: 'ELEVENLABS_API_KEY is not configured on the backend.' })
   try {
-    const { text } = await parseJsonBody(request)
+    const { text, language = 'English' } = await parseJsonBody(request)
     if (!text) return sendJson(response, 400, { error: 'Report text is required.' })
-    const upstream = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${elevenLabsVoice}`, { method: 'POST', headers: { 'xi-api-key': elevenLabsKey, 'Content-Type': 'application/json', Accept: 'audio/mpeg' }, body: JSON.stringify({ text: String(text).slice(0, 5000), model_id: 'eleven_multilingual_v2' }) })
+    const languageCode = language === 'தமிழ்' ? 'ta' : language === 'हिन्दी' ? 'hi' : 'en'
+    const upstream = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${elevenLabsVoice}`, { method: 'POST', headers: { 'xi-api-key': elevenLabsKey, 'Content-Type': 'application/json', Accept: 'audio/mpeg' }, body: JSON.stringify({ text: String(text).slice(0, 5000), model_id: 'eleven_multilingual_v2', language_code: languageCode }) })
     if (!upstream.ok) return sendJson(response, upstream.status, { error: 'ElevenLabs voice generation failed.' })
     response.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' })
     response.end(Buffer.from(await upstream.arrayBuffer()))
