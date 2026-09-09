@@ -18,6 +18,8 @@ type Analysis = {
   report: { findings: string[]; actions: string[] }
 }
 type Language = 'English' | 'தமிழ்' | 'हिन्दी'
+type VoiceLang = 'English' | 'தமிழ்' | 'हिन्दी'
+type PipelineStep = 'idle' | 'cnn' | 'ocr' | 'vision' | 'done'
 type ScanHistoryItem = { id: string; productName: string; timestamp: string; score: number; status: Analysis['complianceStatus']; violations: string[]; analysis: Analysis }
 
 type Copy = { navScan: string; navValidator: string; navIntel: string; lang: string; kicker: string; heroText: string; launch: string; detect: string; validate: string; analyze: string; report: string; inspect: string; scannerText: string; camera: string; upload: string; analyzeButton: string; reading: string; reportEmpty: string; start: string; pdf: string; voice: string; speaking: string; unavailable: string; cameraError: string; capture: string; inside: string; healthTech: string; market: string; price: string; clarity: string; scale: string; catalogText: string }
@@ -65,13 +67,18 @@ const inferProductTags = (analysis: Analysis): string[] => {
   return order.filter((tag) => found.has(tag))
 }
 
+const PIPELINE_LABELS: Record<PipelineStep, string> = { idle: '', cnn: 'CNN Detect', ocr: 'OCR Extract', vision: 'AI Vision', done: 'Report Ready' }
+const PIPELINE_STEPS: PipelineStep[] = ['cnn', 'ocr', 'vision', 'done']
+
 function App() {
   const [file, setFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState('')
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [language, setLanguage] = useState<Language>('English')
+  const [voiceLang, setVoiceLang] = useState<VoiceLang>('English')
   const [error, setError] = useState('')
   const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [pipelineStep, setPipelineStep] = useState<PipelineStep>('idle')
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [isCameraOpen, setIsCameraOpen] = useState(false)
   const [cameraError, setCameraError] = useState('')
@@ -83,37 +90,11 @@ function App() {
   const [tagInput, setTagInput] = useState('')
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const cursorRef = useRef<HTMLDivElement>(null)
   const text = copy[language]
 
   useEffect(() => { if (!file) { setPreviewUrl(''); return }; const url = URL.createObjectURL(file); setPreviewUrl(url); return () => URL.revokeObjectURL(url) }, [file])
   useEffect(() => { try { setHistory(JSON.parse(localStorage.getItem('rockstar-lens-history') || '[]')) } catch { setHistory([]) } }, [])
   useEffect(() => () => streamRef.current?.getTracks().forEach((track) => track.stop()), [])
-  useEffect(() => {
-    const element = cursorRef.current
-    if (!element) return
-    let targetX = window.innerWidth / 2
-    let targetY = window.innerHeight / 2
-    let currentX = targetX
-    let currentY = targetY
-    let rafId = 0
-    const onMove = (event: MouseEvent) => {
-      targetX = event.clientX
-      targetY = event.clientY
-    }
-    const render = () => {
-      currentX += (targetX - currentX) * 0.16
-      currentY += (targetY - currentY) * 0.16
-      element.style.transform = `translate3d(${currentX}px, ${currentY}px, 0)`
-      rafId = window.requestAnimationFrame(render)
-    }
-    window.addEventListener('mousemove', onMove)
-    rafId = window.requestAnimationFrame(render)
-    return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.cancelAnimationFrame(rafId)
-    }
-  }, [])
 
   const decodePackageCode = async (url: string) => {
     setCodeMessage('Detecting barcode or QR...')
@@ -139,22 +120,36 @@ function App() {
   const openCamera = async () => { setCameraError(''); setIsCameraOpen(true); try { const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false }); streamRef.current = stream; if (videoRef.current) videoRef.current.srcObject = stream } catch { setCameraError(text.cameraError) } }
   const closeCamera = () => { streamRef.current?.getTracks().forEach((track) => track.stop()); streamRef.current = null; setIsCameraOpen(false) }
   const capturePhoto = () => { const video = videoRef.current; if (!video || !video.videoWidth) return; const canvas = document.createElement('canvas'); canvas.width = video.videoWidth; canvas.height = video.videoHeight; canvas.getContext('2d')?.drawImage(video, 0, 0); canvas.toBlob((blob) => { if (blob) chooseFile(new File([blob], `label-capture-${Date.now()}.jpg`, { type: 'image/jpeg' })); closeCamera() }, 'image/jpeg', .92) }
+  const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
   const analyzeImage = async () => {
     if (!file) return
-    setIsAnalyzing(true); setError('')
+    setIsAnalyzing(true); setError(''); setPipelineStep('cnn')
     try {
+      /* Step 1: CNN Detect — simulated client-side classification */
+      await delay(900)
+      const cnnCategory = inferProductTags({ productName: file.name, category: '', brand: '', summary: '', barcodeInfo: { detected: false, value: '', productName: '', brand: '', category: '', status: 'NOT_PROVIDED' }, qrInfo: { detected: false, content: '', type: 'NOT_FOUND', verificationStatus: 'NOT_FOUND' }, extractedInfo: {}, complianceScore: 0, complianceStatus: 'NEEDS_REVIEW', aiConfidence: {}, compliance: [], violations: [], warnings: [], health: { ingredients: [], nutriScore: 'UNKNOWN', allergens: [], additives: [] }, technology: { specifications: [] }, market: { observedPrice: '', pricePerUnit: '', brandVerification: 'REVIEW', comparisons: [], recommendations: [] }, report: { findings: [], actions: [] } })[0] || 'General Commodity'
+      setPipelineStep('ocr')
+
+      /* Step 2 + 3: OCR Extract + AI Vision — single server call */
+      await delay(400)
+      setPipelineStep('vision')
       const body = new FormData(); body.append('image', file)
-      const headers: Record<string, string> = { 'x-report-language': language }
+      const headers: Record<string, string> = { 'x-report-language': language, 'x-cnn-category': cnnCategory }
       if (decodedCode?.type === 'BARCODE') headers['x-barcode'] = decodedCode.value
       if (decodedCode?.type === 'QR') headers['x-qr-content'] = encodeURIComponent(decodedCode.value)
       const response = await fetch('/api/analyze', { method: 'POST', headers, body })
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error || text.unavailable)
+
+      /* Step 4: Report ready */
+      setPipelineStep('done')
+      await delay(500)
       setAnalysis(payload)
       setProductTags(inferProductTags(payload))
+      setVoiceLang(language)
       const entry: ScanHistoryItem = { id: crypto.randomUUID(), productName: payload.productName, timestamp: new Date().toISOString(), score: payload.complianceScore, status: payload.complianceStatus, violations: payload.violations.map((item: { name: string }) => item.name), analysis: payload }
       const nextHistory = [entry, ...history].slice(0, 20); setHistory(nextHistory); localStorage.setItem('rockstar-lens-history', JSON.stringify(nextHistory))
-    } catch (reason) { setAnalysis(null); setError(reason instanceof Error ? reason.message : text.unavailable) } finally { setIsAnalyzing(false) }
+    } catch (reason) { setAnalysis(null); setError(reason instanceof Error ? reason.message : text.unavailable) } finally { setIsAnalyzing(false); setPipelineStep('idle') }
   }
   const reportText = useMemo(() => analysis ? `${text.report}. ${analysis.productName}, ${analysis.category}, brand ${analysis.brand}. ${analysis.summary} Product information: ${Object.entries(analysis.extractedInfo).map(([key, value]) => `${key} ${Array.isArray(value) ? value.join(', ') : value}`).join('. ')} Compliance score ${analysis.complianceScore} percent. Status ${analysis.complianceStatus}. Findings: ${analysis.report.findings.join('. ')} Violations: ${analysis.violations.map((item) => `${item.name}. Reason: ${item.reason}`).join('. ')} Warnings: ${analysis.warnings.join('. ')} Actions: ${analysis.report.actions.join('. ')} Market recommendation: ${analysis.market.recommendations.join('. ')}` : '', [analysis, text.report])
   const imageDataUrl = async (source: File) => new Promise<string>((resolve, reject) => {
@@ -166,21 +161,125 @@ function App() {
   const downloadPdf = async () => {
     if (!analysis) return
     const pdf = new jsPDF()
-    const packageInfo = Object.entries(analysis.extractedInfo).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`).join('\n')
-    const violations = analysis.violations.map((item) => `${item.name}: ${item.reason} (${item.confidence})`).join('\n') || 'None detected'
+    const W = 210
+    const M = 12
+    const CW = W - 2 * M
     const date = new Date().toLocaleString()
-    const addPage = (title: string, body: string) => { pdf.addPage(); pdf.setTextColor(10, 10, 9); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(18); pdf.text(title, 15, 20); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10); pdf.text(pdf.splitTextToSize(body, 180), 15, 32) }
-    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(18); pdf.text(text.report, 15, 20); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10); pdf.text(pdf.splitTextToSize(`Inspection Summary\n${analysis.summary}\n\nInspection date\n${date}`, 180), 15, 32)
-    if (file) { try { pdf.addImage(await imageDataUrl(file), 'JPEG', 15, 75, 180, 105, undefined, 'MEDIUM') } catch { /* Keep the text report if the browser cannot encode the image. */ } }
-    addPage('Product Information', `Product: ${analysis.productName}\nBrand: ${analysis.brand}\nCategory: ${analysis.category}`)
-    addPage('Barcode / QR Information', `Barcode: ${analysis.barcodeInfo.value || 'Not detected'}\nQR: ${analysis.qrInfo.content || 'Not detected'}\nVerification: ${analysis.qrInfo.verificationStatus}`)
-    addPage('Extracted Package Information', packageInfo)
-    addPage('Compliance', `Score: ${analysis.complianceScore}%\nStatus: ${analysis.complianceStatus}\nAI confidence: ${analysis.aiConfidence.overall}\n${analysis.compliance.map((item) => `${item.label}: ${item.status} - ${item.value}`).join('\n')}`)
-    addPage('Detected Violations', violations)
-    addPage('Warnings and Explanations', `${analysis.warnings.join('\n') || 'None'}\n\n${analysis.violations.map((item) => `${item.name}: ${item.reason}`).join('\n') || 'No violations detected.'}`)
-    const officialSearches = [`https://www.google.com/search?q=${encodeURIComponent(`${analysis.brand} ${analysis.productName} official website`)}`, `https://www.google.com/search?q=${encodeURIComponent(`${analysis.brand} ${analysis.productName} official price`)}`, `https://www.google.com/search?q=${encodeURIComponent(`${analysis.brand} ${analysis.productName} official models`)}`]
-    addPage('Market and Official Sources', `Observed price: ${analysis.market.observedPrice}\nUnit price: ${analysis.market.pricePerUnit}\n\nOfficial-source searches (verify before relying on them):\n${officialSearches.join('\n')}`)
-    addPage('Inspection Notes', `${analysis.report.findings.join('\n') || 'No additional findings.'}\n\nNext actions:\n${analysis.report.actions.join('\n') || 'No additional actions.'}`)
+    let y = M
+
+    /* ── Helper functions ── */
+    const heading = (label: string) => { pdf.setFont('helvetica', 'bold'); pdf.setFontSize(11); pdf.setTextColor(10, 10, 9); pdf.text(label, M, y); y += 5 }
+    const bodyText = (label: string, value: string) => { pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7); pdf.text(label, M, y); pdf.setFont('helvetica', 'normal'); const lines = pdf.splitTextToSize(value, CW - 28); pdf.text(lines, M + 28, y); y += Math.max(lines.length * 3.2, 3.5) }
+    const separator = () => { pdf.setDrawColor(200); pdf.line(M, y, W - M, y); y += 3 }
+    const ensureSpace = (need: number) => { if (y + need > 285) { pdf.addPage(); y = M } }
+
+    /* ===== PAGE 1: Overview ===== */
+    /* Title bar */
+    pdf.setFillColor(10, 10, 9); pdf.rect(0, 0, W, 22, 'F')
+    pdf.setTextColor(223, 255, 57); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(14); pdf.text('ROCKSTAR LENS — COMPLIANCE REPORT', M, 14)
+    pdf.setTextColor(180, 180, 170); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7); pdf.text(date, W - M - 40, 14)
+    y = 28
+
+    /* Product image (small thumbnail) */
+    if (file) { try { pdf.addImage(await imageDataUrl(file), 'JPEG', M, y, 40, 30, undefined, 'MEDIUM'); } catch { /* skip */ } }
+    const infoX = file ? M + 46 : M
+    pdf.setTextColor(10, 10, 9)
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(13); pdf.text(analysis.productName, infoX, y + 6)
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.text(`Brand: ${analysis.brand}  |  Category: ${analysis.category}`, infoX, y + 12)
+    pdf.setFontSize(7); const summaryLines = pdf.splitTextToSize(analysis.summary, CW - (file ? 50 : 4)); pdf.text(summaryLines, infoX, y + 17)
+    y = Math.max(y + 34, y + 17 + summaryLines.length * 3)
+
+    /* Compliance score bar */
+    separator()
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.text(`COMPLIANCE SCORE: ${analysis.complianceScore}%  —  ${analysis.complianceStatus.replace('_', ' ')}`, M, y)
+    y += 4
+    pdf.setFillColor(230, 230, 220); pdf.rect(M, y, CW, 4, 'F')
+    const scoreColor = analysis.complianceScore >= 70 ? [100, 180, 50] : analysis.complianceScore >= 40 ? [220, 180, 40] : [220, 70, 40]
+    pdf.setFillColor(scoreColor[0], scoreColor[1], scoreColor[2]); pdf.rect(M, y, CW * analysis.complianceScore / 100, 4, 'F')
+    y += 8
+
+    /* Confidence strip */
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6.5); pdf.setTextColor(100)
+    pdf.text(`Product: ${analysis.aiConfidence.productDetection}  |  OCR: ${analysis.aiConfidence.ocr}  |  Compliance: ${analysis.aiConfidence.compliance}  |  Overall: ${analysis.aiConfidence.overall}`, M, y)
+    y += 5; separator()
+
+    /* Compliance checklist grid */
+    heading('COMPLIANCE CHECKLIST')
+    const colW = CW / 2
+    analysis.compliance.forEach((item, i) => {
+      ensureSpace(8)
+      const col = i % 2
+      const x = M + col * colW
+      const statusIcon = item.status === 'PASS' ? '✓' : item.status === 'FAIL' ? '✗' : '?'
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7)
+      pdf.setTextColor(item.status === 'PASS' ? 50 : item.status === 'FAIL' ? 200 : 160, item.status === 'PASS' ? 140 : item.status === 'FAIL' ? 60 : 140, item.status === 'PASS' ? 30 : 30)
+      pdf.text(`${statusIcon} ${item.label}: ${item.status}`, x, y)
+      pdf.setTextColor(80); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6)
+      const valLines = pdf.splitTextToSize(item.value, colW - 6)
+      pdf.text(valLines, x + 2, y + 3)
+      if (col === 1) y += Math.max(valLines.length * 2.5 + 4, 7)
+    })
+    if (analysis.compliance.length % 2 === 1) y += 7
+    y += 2; separator()
+
+    /* Violations & warnings */
+    ensureSpace(20); heading('VIOLATIONS & WARNINGS')
+    if (analysis.violations.length === 0 && analysis.warnings.length === 0) { pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7); pdf.setTextColor(80); pdf.text('No violations detected from visible evidence.', M, y); y += 5 }
+    analysis.violations.forEach((v) => { ensureSpace(8); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7); pdf.setTextColor(200, 60, 40); pdf.text(`✗ ${v.name}`, M, y); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(80); const rLines = pdf.splitTextToSize(v.reason, CW - 10); pdf.text(rLines, M + 4, y + 3); y += rLines.length * 2.8 + 4 })
+    analysis.warnings.forEach((w) => { ensureSpace(6); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6.5); pdf.setTextColor(160, 140, 30); const wLines = pdf.splitTextToSize(`⚠ ${w}`, CW); pdf.text(wLines, M, y); y += wLines.length * 2.8 + 2 })
+
+    /* ===== PAGE 2: Details ===== */
+    pdf.addPage(); y = M
+    pdf.setFillColor(10, 10, 9); pdf.rect(0, 0, W, 16, 'F')
+    pdf.setTextColor(223, 255, 57); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.text('PAGE 2 — DETAILED INFORMATION', M, 11)
+    y = 22
+    pdf.setTextColor(10, 10, 9)
+
+    /* Extracted package info */
+    heading('EXTRACTED PACKAGE INFORMATION')
+    Object.entries(analysis.extractedInfo).forEach(([k, v]) => { ensureSpace(5); bodyText(k.replace(/([A-Z])/g, ' $1').trim(), Array.isArray(v) ? v.join(', ') : String(v)) })
+    y += 2; separator()
+
+    /* Barcode / QR info */
+    ensureSpace(14); heading('BARCODE / QR INFORMATION')
+    bodyText('Barcode', analysis.barcodeInfo.value || 'Not detected')
+    bodyText('QR content', analysis.qrInfo.content || 'Not detected')
+    bodyText('QR verification', analysis.qrInfo.verificationStatus)
+    y += 2; separator()
+
+    /* Health & tech */
+    ensureSpace(20); heading('HEALTH & TECH INTELLIGENCE')
+    bodyText('Nutri-Score', analysis.health.nutriScore)
+    bodyText('Ingredients', analysis.health.ingredients.join(', ') || 'Not visible')
+    bodyText('Allergens', analysis.health.allergens.join(', ') || 'None detected')
+    bodyText('Additives', analysis.health.additives.join(', ') || 'None detected')
+    bodyText('Specifications', analysis.technology.specifications.join(', ') || 'N/A')
+    y += 2; separator()
+
+    /* Market intelligence */
+    ensureSpace(16); heading('MARKET INTELLIGENCE')
+    bodyText('Observed MRP', analysis.market.observedPrice)
+    bodyText('Unit price', analysis.market.pricePerUnit)
+    bodyText('Brand status', analysis.market.brandVerification)
+    analysis.market.recommendations.forEach((r) => { ensureSpace(5); bodyText('→', r) })
+    y += 2; separator()
+
+    /* Findings & actions */
+    ensureSpace(16); heading('FINDINGS & ACTIONS')
+    analysis.report.findings.forEach((f) => { ensureSpace(5); bodyText('Finding', f) })
+    analysis.report.actions.forEach((a) => { ensureSpace(5); bodyText('Action', a) })
+    y += 2; separator()
+
+    /* Official source links */
+    ensureSpace(12); heading('OFFICIAL SOURCE LINKS')
+    const searches = [`${analysis.brand} ${analysis.productName} official website`, `${analysis.brand} ${analysis.productName} official price`]
+    searches.forEach((q) => { ensureSpace(5); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6); pdf.setTextColor(30, 80, 180); pdf.text(`https://www.google.com/search?q=${encodeURIComponent(q)}`, M, y); y += 3.5 })
+
+    /* Footer */
+    pdf.setTextColor(150); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6)
+    pdf.text('Generated by Rockstar Lens — AI Commodity Compliance Inspector', M, 288)
+
+    /* Download + open */
     const pdfBlob = pdf.output('blob')
     const pdfUrl = URL.createObjectURL(pdfBlob)
     const downloadLink = document.createElement('a')
@@ -193,7 +292,7 @@ function App() {
   const speakReport = async () => {
     if (!reportText) return
     setIsSpeaking(true); setError('')
-    try { const response = await fetch('/api/voice-report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: reportText, language }) }); if (!response.ok) throw new Error('fallback'); const audio = new Audio(URL.createObjectURL(await response.blob())); audio.onended = () => setIsSpeaking(false); await audio.play() } catch { if (!('speechSynthesis' in window)) { setIsSpeaking(false); setError('Voice report is not supported in this browser.'); return }; const utterance = new SpeechSynthesisUtterance(reportText); utterance.lang = language === 'தமிழ்' ? 'ta-IN' : language === 'हिन्दी' ? 'hi-IN' : 'en-IN'; utterance.onend = () => setIsSpeaking(false); utterance.onerror = () => setIsSpeaking(false); window.speechSynthesis.cancel(); window.speechSynthesis.speak(utterance) }
+    try { const response = await fetch('/api/voice-report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: reportText, language: voiceLang }) }); if (!response.ok) throw new Error('fallback'); const audio = new Audio(URL.createObjectURL(await response.blob())); audio.onended = () => setIsSpeaking(false); await audio.play() } catch { if (!('speechSynthesis' in window)) { setIsSpeaking(false); setError('Voice report is not supported in this browser.'); return }; const utterance = new SpeechSynthesisUtterance(reportText); utterance.lang = voiceLang === 'தமிழ்' ? 'ta-IN' : voiceLang === 'हिन्दी' ? 'hi-IN' : 'en-IN'; utterance.onend = () => setIsSpeaking(false); utterance.onerror = () => setIsSpeaking(false); window.speechSynthesis.cancel(); window.speechSynthesis.speak(utterance) }
   }
   const openHistory = (entry: ScanHistoryItem) => { setAnalysis(entry.analysis); setProductTags(inferProductTags(entry.analysis)); window.location.hash = 'validator' }
   const addTag = () => {
@@ -209,3 +308,19 @@ function App() {
   const reviewCount = history.filter((item) => item.status === 'NEEDS_REVIEW').length
   const nonCompliantCount = history.filter((item) => item.status === 'NON_COMPLIANT').length
   const commonViolations = [...new Set(history.flatMap((item) => item.violations))].slice(0, 4)
+
+  return <main className="site-shell">
+    <nav className="topbar"><a className="brand" href="#top"><span className="brand-mark">R</span><span>ROCKSTAR<br />LENS</span></a><div className="nav-links"><a href="#scan">{text.navScan}</a><a href="#validator">{text.navValidator}</a><a href="#intel">{text.navIntel}</a></div><label className="language-select"><span>{text.lang}</span><select value={language} onChange={(event) => setLanguage(event.target.value as Language)} aria-label={text.lang}><option>English</option><option>தமிழ்</option><option>हिन्दी</option></select></label></nav>
+    <section className="hero" id="top"><div className="hero-copy"><p className="kicker">{text.kicker}</p><h1>READ<br /><em>THE</em> LABEL.</h1><p className="hero-text">{text.heroText}</p><a className="scroll-cue" href="#scan"><span>↓</span> {text.launch}</a></div><div className="hero-art"><div className="hero-grid" /><img className="rockstar-hero-image" src="https://cms-static-prod.ros.rockstargames.com/images/18izrhn535ym/vH3cmDeyYwZAfOSRrFzF7/a647ee83433be34607363ef254639604/vH3cmDeyYwZAfOSRrFzF7.svg" alt="Rockstar Games logo" /><span className="hero-stamp">DETECT<br />VALIDATE<br />ANALYZE</span></div></section>
+    <section className="mission-strip"><span>01 / {text.detect}</span><span>02 / {text.validate}</span><span>03 / {text.analyze}</span><span>04 / {text.report}</span></section>
+    <section className="search-section" id="scan"><div className="section-intro"><p className="kicker">01 / Hybrid scanner</p><h2>{text.inspect}</h2><p>{text.scannerText}</p><div className="mode-pills"><span>CNN</span><span>OCR</span><span>AI VISION</span><span>REPORT</span></div></div><div className="search-card"><label className={`dropzone ${previewUrl ? 'has-file' : ''}`}>{previewUrl ? <img src={previewUrl} alt="Selected commodity label" /> : <><span className="crosshair">◎</span><strong>{text.upload}</strong><small>JPG, PNG, WEBP · up to 15 MB</small></>}<input type="file" accept="image/png,image/jpeg,image/webp" onChange={selectFile} /></label><div className="search-actions"><button className="primary-button" type="button" disabled={!file || isAnalyzing} onClick={analyzeImage}>{isAnalyzing ? text.reading : text.analyzeButton}<span>↗</span></button><button className="secondary-button" type="button" onClick={openCamera}>◎ <span>{text.camera}</span></button></div>{isAnalyzing && <div className="pipeline-stepper">{PIPELINE_STEPS.map((step) => { const idx = PIPELINE_STEPS.indexOf(step); const curIdx = PIPELINE_STEPS.indexOf(pipelineStep); const cls = pipelineStep === step ? 'active' : idx < curIdx ? 'done' : ''; return <div className={`pipeline-step ${cls}`} key={step}><span className="step-num">{String(idx + 1).padStart(2, '0')}</span><span className="step-label">{PIPELINE_LABELS[step]}</span><span className="step-status">{cls === 'done' ? '✓' : cls === 'active' ? '⟳' : '—'}</span></div> })}</div>}{codeMessage && <p className="code-message">{codeMessage}</p>}{error && <p className="notice">{error}</p>}</div></section>
+    <section className="results-section" id="validator" aria-live="polite"><div className="result-heading"><div><p className="kicker">02 / {text.report}</p><h2>{analysis ? analysis.productName : text.reportEmpty}</h2></div>{analysis && <div className="result-actions"><button className="report-button" type="button" onClick={downloadPdf}>Generate PDF Report</button><div className="voice-group"><select className="voice-lang-select" value={voiceLang} onChange={(e) => setVoiceLang(e.target.value as VoiceLang)} aria-label="Voice language"><option value="English">🔊 English</option><option value="தமிழ்">🔊 தமிழ்</option><option value="हिन्दी">🔊 हिन्दी</option></select><button className="voice-button" type="button" onClick={speakReport} disabled={isSpeaking}>{isSpeaking ? text.speaking : `◉ ${text.voice}`}</button></div></div>}</div>{!analysis ? <div className="empty-readout"><span>+</span><p>{text.start}</p></div> : <><div className="analysis-summary"><div><p>{analysis.summary}</p><small>{analysis.category} / {analysis.brand}</small></div><div className="score"><span>Compliance score</span><strong>{analysis.complianceScore}%</strong><small>{analysis.complianceStatus.replace('_', ' ')} · {analysis.aiConfidence.overall} confidence</small></div></div><div className="tags-panel"><div className="tags-heading"><p className="kicker">Product tags</p><span>{productTags.length} tagged</span></div><div className="tag-chips">{productTags.map((tag) => <span className="tag-chip" key={tag}><button type="button" className="tag-remove" onClick={() => removeTag(tag)} aria-label={`Remove ${tag}`}>×</button><span>{tag}</span></span>)}{<div className="tag-add"><input type="text" placeholder="Add tag..." value={tagInput} onChange={(event) => setTagInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') addTag() }} aria-label="Add product tag" /><button type="button" className="tag-add-button" onClick={addTag}>+</button></div>}</div></div><div className="code-result"><strong>{analysis.barcodeInfo.detected ? 'Barcode detected' : analysis.qrInfo.detected ? 'QR Detected' : 'Code scan'}</strong><span>{analysis.barcodeInfo.value || analysis.qrInfo.content || 'Product information not found — continuing with package analysis.'}</span><small>{analysis.qrInfo.detected ? `Verification Status: ${analysis.qrInfo.verificationStatus}` : `Barcode / QR detection confidence: ${analysis.aiConfidence.codeDetection}`}</small></div><div className="confidence-strip"><span>Product: {analysis.aiConfidence.productDetection}</span><span>OCR: {analysis.aiConfidence.ocr}</span><span>Compliance: {analysis.aiConfidence.compliance}</span><span>Overall: {analysis.aiConfidence.overall}</span></div><div className="compliance-grid">{analysis.compliance.map((item) => <article className={`check-card ${item.status.toLowerCase()}`} key={item.label}><div><span>{item.status === 'PASS' ? '✓' : item.status === 'FAIL' ? '×' : '?'}</span><h3>{item.label}</h3></div><strong>{item.status}</strong><p>{item.value}</p><small>{item.confidence} confidence</small></article>)}</div><div className="violation-panel"><h3>Violations and warnings</h3>{analysis.violations.map((item) => <p key={item.name}>❌ <b>{item.name}</b> — {item.reason} <small>({item.confidence})</small></p>)}{analysis.warnings.map((item) => <p key={item}>⚠ {item}</p>)}{!analysis.violations.length && !analysis.warnings.length && <p>No violations detected from visible evidence.</p>}</div><div className="intel-grid" id="intel"><article><p className="kicker">03 / {text.healthTech}</p><h3>{text.inside}</h3><p><b>Nutri-Score:</b> {analysis.health.nutriScore}</p><p><b>Ingredients:</b> {analysis.health.ingredients.join(', ') || 'Not visible'}</p><p><b>Allergens:</b> {analysis.health.allergens.join(', ') || 'None detected'}</p><p><b>Additives:</b> {analysis.health.additives.join(', ') || 'None detected'}</p><p><b>Specifications:</b> {analysis.technology.specifications.join(', ') || 'Not applicable'}</p></article><article><p className="kicker">04 / {text.market}</p><h3>{text.price}</h3><p><b>Observed MRP:</b> {analysis.market.observedPrice}</p><p><b>Unit price:</b> {analysis.market.pricePerUnit}</p><p><b>Brand:</b> {analysis.market.brandVerification}</p>{analysis.market.recommendations.map((item) => <p key={item}>→ {item}</p>)}</article></div><div className="report-block"><article><p className="kicker">05 / {text.report}</p><h3>Findings</h3>{analysis.report.findings.map((item) => <p key={item}>→ {item}</p>)}</article><article><p className="kicker">Next actions</p>{analysis.report.actions.map((item) => <p key={item}>→ {item}</p>)}</article></div></>}</section>
+    {analysis && <section className="report-pages"><p className="kicker">Report pages</p><div className="report-page-buttons">{['Overview', 'Details'].map((page, index) => <button className={reportPage === index + 1 ? 'active' : ''} type="button" key={page} onClick={() => setReportPage(index + 1)}>{String(index + 1).padStart(2, '0')} / {page}</button>)}</div><div className="report-page-note">Page {String(reportPage).padStart(2, '0')} selected. Use Generate PDF Report above to download a compact 2-page report with all details.</div></section>}
+    <section className="history-section"><div><p className="kicker">06 / Inspection history</p><h2>Scan<br /><em>archive.</em></h2></div><div className="history-dashboard"><div className="history-stats"><span><b>{history.length}</b>Total scanned</span><span><b>{compliantCount}</b>Compliant</span><span><b>{nonCompliantCount}</b>Non-compliant</span><span><b>{reviewCount}</b>Needs review</span></div>{commonViolations.length > 0 && <p className="history-common">Common violations: {commonViolations.join(' · ')}</p>}<div className="history-list">{history.length === 0 ? <p>No inspections saved yet.</p> : history.map((entry) => <button type="button" key={entry.id} onClick={() => openHistory(entry)}><strong>{entry.productName}</strong><span>{new Date(entry.timestamp).toLocaleString()} · {entry.score}% · {entry.status.replace('_', ' ')}</span><small>{entry.violations.join(', ') || 'No violations recorded'}</small></button>)}</div></div></section>
+    <section className="catalog-section"><div><p className="kicker">07 / {text.kicker}</p><h2>{text.clarity}<br /><em>{text.scale}</em></h2></div><p>{text.catalogText}</p><div className="feature-list"><span>MRP + quantity</span><span>Expiry tracking</span><span>Voice reports</span><span>Admin ready</span></div></section>
+    <footer><span>ROCKSTAR LENS / {text.kicker}</span><span>{text.detect}. {text.validate}. {text.analyze}. {text.report}.</span></footer>
+    {isCameraOpen && <div className="camera-modal" role="dialog" aria-modal="true" aria-label={text.camera}><div className="camera-window"><button className="close-button" type="button" onClick={closeCamera}>×</button><p className="kicker">Live hybrid scanner</p><h2>Frame the label.</h2><div className="video-frame">{cameraError ? <p>{cameraError}</p> : <video ref={videoRef} autoPlay playsInline muted />}</div><button className="primary-button" type="button" disabled={Boolean(cameraError)} onClick={capturePhoto}>{text.capture} <span>◎</span></button></div></div>}
+  </main>
+}
+
+export default App

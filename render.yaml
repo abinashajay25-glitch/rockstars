@@ -2,7 +2,6 @@ services:
   - type: web
     name: rockstar-lens
     runtime: node
-    rootDir: client
     buildCommand: npm ci && npm run build
     startCommand: npm start
     healthCheckPath: /
