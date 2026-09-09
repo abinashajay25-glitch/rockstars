@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { BrowserMultiFormatReader } from '@zxing/browser'
 import { jsPDF } from 'jspdf'
+import QRCode from 'qrcode'
 import './App.css'
 
 type ComplianceItem = { label: string; status: 'PASS' | 'FAIL' | 'REVIEW'; value: string; confidence: string }
@@ -19,6 +20,13 @@ type Analysis = {
 }
 type Language = 'English' | 'தமிழ்' | 'हिन्दी'
 type ScanHistoryItem = { id: string; productName: string; timestamp: string; score: number; status: Analysis['complianceStatus']; violations: string[]; analysis: Analysis }
+type ReportLabels = { title: string; summary: string; productCodes: string; confidence: string; declarations: string; compliance: string; health: string; technology: string; market: string; violations: string; actions: string; provenance: string; product: string; brand: string; category: string; barcode: string; qr: string; verification: string; score: string; status: string; ingredients: string; nutriScore: string; allergens: string; additives: string; specifications: string; observedPrice: string; pricePerUnit: string; brandVerification: string; comparisons: string; recommendations: string; findings: string; nextActions: string; reportLanguage: string; barcodeLabel: string }
+
+const reportLabels: Record<Language, ReportLabels> = {
+  English: { title: 'Compliance intelligence', summary: 'Inspection summary', productCodes: 'Product and machine codes', confidence: 'AI confidence', declarations: 'Package declarations', compliance: 'Seven-point compliance', health: 'Health intelligence', technology: 'Technology specifications', market: 'Market intelligence', violations: 'Violations and warnings', actions: 'Findings and next actions', provenance: 'Report provenance', product: 'Product', brand: 'Brand', category: 'Category', barcode: 'Barcode', qr: 'QR', verification: 'Verification', score: 'Compliance score', status: 'Status', ingredients: 'Ingredients', nutriScore: 'Nutri-Score', allergens: 'Allergens', additives: 'Additives', specifications: 'Specifications', observedPrice: 'Observed price', pricePerUnit: 'Price per unit', brandVerification: 'Brand verification', comparisons: 'Comparisons', recommendations: 'Recommendations', findings: 'Findings', nextActions: 'Next actions', reportLanguage: 'Report language', barcodeLabel: 'Product QR label' },
+  'தமிழ்': { title: 'இணக்க நுண்ணறிவு', summary: 'ஆய்வு சுருக்கம்', productCodes: 'பொருள் மற்றும் குறியீடுகள்', confidence: 'AI நம்பிக்கை', declarations: 'பொதி அறிவிப்புகள்', compliance: 'ஏழு அம்ச இணக்கம்', health: 'ஆரோக்கிய தகவல்', technology: 'தொழில்நுட்ப விவரக்குறிப்புகள்', market: 'சந்தை தகவல்', violations: 'மீறல்கள் மற்றும் எச்சரிக்கைகள்', actions: 'கண்டறிதல்கள் மற்றும் அடுத்த செயல்கள்', provenance: 'அறிக்கை மூலம்', product: 'பொருள்', brand: 'பிராண்ட்', category: 'வகை', barcode: 'பார்கோடு', qr: 'QR', verification: 'சரிபார்ப்பு', score: 'இணக்க மதிப்பெண்', status: 'நிலை', ingredients: 'பொருட்கள்', nutriScore: 'ஊட்ட மதிப்பெண்', allergens: 'ஒவ்வாமைகள்', additives: 'சேர்க்கைகள்', specifications: 'விவரக்குறிப்புகள்', observedPrice: 'காணப்பட்ட விலை', pricePerUnit: 'அலகு விலை', brandVerification: 'பிராண்ட் சரிபார்ப்பு', comparisons: 'ஒப்பீடுகள்', recommendations: 'பரிந்துரைகள்', findings: 'கண்டறிதல்கள்', nextActions: 'அடுத்த செயல்கள்', reportLanguage: 'அறிக்கை மொழி', barcodeLabel: 'பொருள் QR லேபிள்' },
+  'हिन्दी': { title: 'अनुपालन इंटेलिजेंस', summary: 'जांच सारांश', productCodes: 'उत्पाद और मशीन कोड', confidence: 'AI भरोसा', declarations: 'पैकेज घोषणाएं', compliance: 'सात-बिंदु अनुपालन', health: 'स्वास्थ्य जानकारी', technology: 'तकनीकी विनिर्देश', market: 'बाजार जानकारी', violations: 'उल्लंघन और चेतावनियां', actions: 'निष्कर्ष और अगले कदम', provenance: 'रिपोर्ट स्रोत', product: 'उत्पाद', brand: 'ब्रांड', category: 'श्रेणी', barcode: 'बारकोड', qr: 'QR', verification: 'सत्यापन', score: 'अनुपालन स्कोर', status: 'स्थिति', ingredients: 'सामग्री', nutriScore: 'न्यूट्री-स्कोर', allergens: 'एलर्जेन', additives: 'एडिटिव', specifications: 'विनिर्देश', observedPrice: 'देखी गई कीमत', pricePerUnit: 'इकाई कीमत', brandVerification: 'ब्रांड सत्यापन', comparisons: 'तुलनाएं', recommendations: 'सिफारिशें', findings: 'निष्कर्ष', nextActions: 'अगले कदम', reportLanguage: 'रिपोर्ट भाषा', barcodeLabel: 'उत्पाद QR लेबल' },
+}
 
 const readJsonResponse = async (response: Response) => {
   const body = await response.text()
@@ -47,6 +55,7 @@ function App() {
   const [decodedCode, setDecodedCode] = useState<{ type: 'BARCODE' | 'QR'; value: string } | null>(null)
   const [codeMessage, setCodeMessage] = useState('')
   const [reportPage, setReportPage] = useState(1)
+  const [barcodeDataUrl, setBarcodeDataUrl] = useState('')
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const text = copy[language]
@@ -104,7 +113,7 @@ function App() {
   }
   const chooseFile = (selected: File | undefined) => {
     if (!selected || !selected.type.startsWith('image/')) { setError('Please choose a JPG, PNG, or WEBP label image.'); return }
-    setFile(selected); setAnalysis(null); setError('')
+    setFile(selected); setAnalysis(null); setBarcodeDataUrl(''); setError('')
     const url = URL.createObjectURL(selected); void decodePackageCode(url).finally(() => URL.revokeObjectURL(url))
   }
   const selectFile = (event: ChangeEvent<HTMLInputElement>) => chooseFile(event.target.files?.[0])
@@ -127,15 +136,27 @@ function App() {
       const nextHistory = [entry, ...history].slice(0, 20); setHistory(nextHistory); localStorage.setItem('rockstar-lens-history', JSON.stringify(nextHistory))
     } catch (reason) { setAnalysis(null); setError(reason instanceof Error ? reason.message : text.unavailable) } finally { setIsAnalyzing(false) }
   }
-  const reportText = useMemo(() => analysis ? `${text.report}. ${analysis.productName}, ${analysis.category}, brand ${analysis.brand}. ${analysis.summary} Product information: ${Object.entries(analysis.extractedInfo).map(([key, value]) => `${key} ${Array.isArray(value) ? value.join(', ') : value}`).join('. ')} Compliance score ${analysis.complianceScore} percent. Status ${analysis.complianceStatus}. Findings: ${analysis.report.findings.join('. ')} Violations: ${analysis.violations.map((item) => `${item.name}. Reason: ${item.reason}`).join('. ')} Warnings: ${analysis.warnings.join('. ')} Actions: ${analysis.report.actions.join('. ')} Market recommendation: ${analysis.market.recommendations.join('. ')}` : '', [analysis, text.report])
+  const labels = reportLabels[language]
+  const reportText = useMemo(() => analysis ? `${text.report}. ${analysis.productName}, ${analysis.category}, ${labels.brand} ${analysis.brand}. ${analysis.summary} ${labels.declarations}: ${Object.entries(analysis.extractedInfo).map(([key, value]) => `${key} ${Array.isArray(value) ? value.join(', ') : value}`).join('. ')}. ${labels.score} ${analysis.complianceScore} percent. ${labels.status} ${analysis.complianceStatus}. ${labels.findings}: ${analysis.report.findings.join('. ')}. ${labels.violations}: ${analysis.violations.map((item) => `${item.name}. Reason: ${item.reason}`).join('. ')}. ${analysis.warnings.join('. ')}. ${labels.nextActions}: ${analysis.report.actions.join('. ')}. ${labels.recommendations}: ${analysis.market.recommendations.join('. ')}` : '', [analysis, labels, text.report])
   const imageDataUrl = async (source: File) => new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => resolve(String(reader.result))
     reader.onerror = () => reject(new Error('The uploaded image could not be added to the PDF.'))
     reader.readAsDataURL(source)
   })
+  const generateBarcode = async () => {
+    if (!analysis) return ''
+    const payload = {
+      id: crypto.randomUUID(), generatedAt: new Date().toISOString(), product: analysis.productName, brand: analysis.brand,
+      details: analysis.extractedInfo, complianceScore: analysis.complianceScore, status: analysis.complianceStatus,
+    }
+    const dataUrl = await QRCode.toDataURL(JSON.stringify(payload), { errorCorrectionLevel: 'M', margin: 2, width: 320, color: { dark: '#0a0a09', light: '#ffffff' } })
+    setBarcodeDataUrl(dataUrl)
+    return dataUrl
+  }
   const downloadPdf = async () => {
     if (!analysis) return
+    const reportQr = barcodeDataUrl || await generateBarcode()
     const pdf = new jsPDF({ unit: 'mm', format: 'a4' })
     const pageWidth = 210
     const margin = 14
@@ -157,7 +178,7 @@ function App() {
       pdf.setTextColor(35, 35, 31); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.text(bodyLines.slice(0, Math.floor((height - 11) / 4.1)), x + 4, y + 12, { lineHeightFactor: 1.15 })
       return height
     }
-    drawHeader(1, 'Compliance intelligence')
+    drawHeader(1, labels.title)
     pdf.setTextColor(10, 10, 9); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(21); pdf.text(pdf.splitTextToSize(analysis.productName, 120), margin, 38)
     pdf.setTextColor(95, 95, 88); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.text(`${analysis.brand} / ${analysis.category}`, margin, 48)
     pdf.setFillColor(223, 255, 57); pdf.roundedRect(154, 31, 42, 24, 3, 3, 'F'); pdf.setTextColor(10, 10, 9); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(18); pdf.text(`${analysis.complianceScore}%`, 175, 43, { align: 'center' }); pdf.setFontSize(6.5); pdf.text(analysis.complianceStatus.replace('_', ' '), 175, 50, { align: 'center' })
@@ -165,29 +186,30 @@ function App() {
     if (file) { try { pdf.addImage(await imageDataUrl(file), 'JPEG', margin, y, 54, 42, undefined, 'MEDIUM') } catch { /* Continue with the text report when image encoding is unavailable. */ } }
     const overviewX = file ? 76 : margin
     const overviewWidth = file ? 120 : contentWidth
-    drawSection('Inspection summary', analysis.summary, overviewX, y, overviewWidth, 44)
+    drawSection(labels.summary, analysis.summary, overviewX, y, overviewWidth, 44)
     y += 49
     const columnGap = 6
     const columnWidth = (contentWidth - columnGap) / 2
-    drawSection('Product and machine codes', [lines('Product', analysis.productName), lines('Brand', analysis.brand), lines('Category', analysis.category), lines('Barcode', analysis.barcodeInfo.value || 'Not detected'), lines('QR', analysis.qrInfo.content || 'Not detected'), lines('Verification', analysis.qrInfo.verificationStatus)].join('\n'), margin, y, columnWidth, 58)
-    drawSection('AI confidence', Object.entries(analysis.aiConfidence).map(([key, item]) => lines(key, item)).join('\n'), margin + columnWidth + columnGap, y, columnWidth, 58)
+    drawSection(labels.productCodes, [lines(labels.product, analysis.productName), lines(labels.brand, analysis.brand), lines(labels.category, analysis.category), lines(labels.barcode, analysis.barcodeInfo.value || 'Not detected'), lines(labels.qr, analysis.qrInfo.content || 'Not detected'), lines(labels.verification, analysis.qrInfo.verificationStatus)].join('\n'), margin, y, columnWidth, 58)
+    drawSection(labels.confidence, Object.entries(analysis.aiConfidence).map(([key, item]) => lines(key, item)).join('\n'), margin + columnWidth + columnGap, y, columnWidth, 58)
     y += 64
-    drawSection('Package declarations', Object.entries(analysis.extractedInfo).map(([key, item]) => lines(key, item)).join('\n'), margin, y, contentWidth, 54)
+    drawSection(labels.declarations, Object.entries(analysis.extractedInfo).map(([key, item]) => lines(key, item)).join('\n'), margin, y, contentWidth, 54)
     y += 60
-    drawSection('Seven-point compliance', analysis.compliance.map((item) => `${item.status}  ${item.label}: ${item.value} [${item.confidence}]`).join('\n') || 'No compliance checks returned.', margin, y, contentWidth, 44)
+    drawSection(labels.compliance, analysis.compliance.map((item) => `${item.status}  ${item.label}: ${item.value} [${item.confidence}]`).join('\n') || 'No compliance checks returned.', margin, y, contentWidth, 44)
 
-    pdf.addPage(); drawHeader(2, 'Health, market and actions')
+    pdf.addPage(); drawHeader(2, `${labels.health}, ${labels.market} and ${labels.actions}`)
     y = 31
-    drawSection('Health intelligence', [`Ingredients: ${value(analysis.health.ingredients)}`, `Nutri-Score: ${value(analysis.health.nutriScore)}`, `Allergens: ${value(analysis.health.allergens)}`, `Additives: ${value(analysis.health.additives)}`].join('\n'), margin, y, columnWidth, 45)
-    drawSection('Technology specifications', `Specifications: ${value(analysis.technology.specifications)}`, margin + columnWidth + columnGap, y, columnWidth, 45)
+    drawSection(labels.health, [`${labels.ingredients}: ${value(analysis.health.ingredients)}`, `${labels.nutriScore}: ${value(analysis.health.nutriScore)}`, `${labels.allergens}: ${value(analysis.health.allergens)}`, `${labels.additives}: ${value(analysis.health.additives)}`].join('\n'), margin, y, columnWidth, 45)
+    drawSection(labels.technology, `${labels.specifications}: ${value(analysis.technology.specifications)}`, margin + columnWidth + columnGap, y, columnWidth, 45)
     y += 51
-    drawSection('Market intelligence', [lines('Observed price', analysis.market.observedPrice), lines('Price per unit', analysis.market.pricePerUnit), lines('Brand verification', analysis.market.brandVerification), `Comparisons: ${analysis.market.comparisons.map((item) => `${item.seller} / ${item.price} / ${item.unitPrice}`).join('; ') || 'None'}`, `Recommendations: ${value(analysis.market.recommendations)}`].join('\n'), margin, y, contentWidth, 48)
+    drawSection(labels.market, [lines(labels.observedPrice, analysis.market.observedPrice), lines(labels.pricePerUnit, analysis.market.pricePerUnit), lines(labels.brandVerification, analysis.market.brandVerification), `${labels.comparisons}: ${analysis.market.comparisons.map((item) => `${item.seller} / ${item.price} / ${item.unitPrice}`).join('; ') || 'None'}`, `${labels.recommendations}: ${value(analysis.market.recommendations)}`].join('\n'), margin, y, contentWidth, 48)
     y += 54
-    drawSection('Violations and warnings', [`Violations: ${analysis.violations.map((item) => `${item.name}: ${item.reason} (${item.confidence})`).join('; ') || 'None detected.'}`, `Warnings: ${value(analysis.warnings, 'None reported.')}`].join('\n'), margin, y, contentWidth, 48)
+    drawSection(labels.violations, [`${labels.violations}: ${analysis.violations.map((item) => `${item.name}: ${item.reason} (${item.confidence})`).join('; ') || 'None detected.'}`, `Warnings: ${value(analysis.warnings, 'None reported.')}`].join('\n'), margin, y, contentWidth, 48)
     y += 54
-    drawSection('Findings and next actions', [`Findings: ${value(analysis.report.findings, 'No additional findings.')}`, `Actions: ${value(analysis.report.actions, 'No additional actions.')}`].join('\n'), margin, y, contentWidth, 45)
+    drawSection(labels.actions, [`${labels.findings}: ${value(analysis.report.findings, 'No additional findings.')}`, `${labels.nextActions}: ${value(analysis.report.actions, 'No additional actions.')}`].join('\n'), margin, y, contentWidth, 45)
     y += 51
-    drawSection('Report provenance', 'Generated from the uploaded package image, OCR, barcode or QR evidence, and AI label analysis. Unclear fields remain marked for review and should be verified against the physical package.', margin, y, contentWidth, 35)
+    if (reportQr) { pdf.addImage(reportQr, 'PNG', 151, y - 45, 45, 45); pdf.setTextColor(35, 35, 31); pdf.setFontSize(7); pdf.text(labels.barcodeLabel, 173.5, y + 4, { align: 'center' }) }
+    drawSection(labels.provenance, `${labels.reportLanguage}: ${language}. Generated from the uploaded package image, OCR, barcode or QR evidence, and AI label analysis. Unclear fields remain marked for review and should be verified against the physical package.`, margin, y, 130, 35)
     const pdfBlob = pdf.output('blob')
     const pdfUrl = URL.createObjectURL(pdfBlob)
     const downloadLink = document.createElement('a')
@@ -211,6 +233,7 @@ function App() {
   return <main className="site-shell">
     <span className="cursor-dot" aria-hidden="true" />
     <span className="cursor-ring" aria-hidden="true" />
+    {analysis && <div className="report-utility" aria-label="Report utilities"><button className="report-button" type="button" onClick={() => void generateBarcode()}>🏷️ Generate Barcode</button><button className="voice-button" type="button" onClick={speakReport} disabled={isSpeaking}>🔊 {isSpeaking ? text.speaking : 'Read Aloud'}</button>{barcodeDataUrl && <img src={barcodeDataUrl} alt={labels.barcodeLabel} />}</div>}
     <nav className="topbar"><a className="brand" href="#top"><span className="brand-mark">R</span><span>ROCKSTAR<br />LENS</span></a><div className="nav-links"><a href="#scan">{text.navScan}</a><a href="#validator">{text.navValidator}</a><a href="#intel">{text.navIntel}</a></div><label className="language-select"><span>{text.lang}</span><select value={language} onChange={(event) => setLanguage(event.target.value as Language)} aria-label={text.lang}><option>English</option><option>தமிழ்</option><option>हिन्दी</option></select></label></nav>
     <section className="hero" id="top"><div className="hero-copy"><p className="kicker">{text.kicker}</p><h1>READ<br /><em>THE</em> LABEL.</h1><p className="hero-text">{text.heroText}</p><a className="scroll-cue" href="#scan"><span>↓</span> {text.launch}</a></div><div className="hero-art"><div className="hero-grid" /><img className="rockstar-hero-image" src="https://cms-static-prod.ros.rockstargames.com/images/18izrhn535ym/vH3cmDeyYwZAfOSRrFzF7/a647ee83433be34607363ef254639604/vH3cmDeyYwZAfOSRrFzF7.svg" alt="Rockstar Games logo" /><span className="hero-stamp">DETECT<br />VALIDATE<br />ANALYZE</span></div></section>
     <section className="mission-strip"><span>01 / {text.detect}</span><span>02 / {text.validate}</span><span>03 / {text.analyze}</span><span>04 / {text.report}</span></section>
