@@ -45,7 +45,7 @@ const parseMultipartImage = async (request) => {
 
 const schemaPrompt = `You are an AI packaged commodity compliance inspector in a hybrid CNN + OCR + AI vision pipeline. First perform a CNN-style visual feature pass over the image: locate the package/label, assess framing and legibility, and identify visible regions such as branding, nutrition, dates, quantity, and warnings. Then perform OCR from visible text and reconcile it with barcode/QR evidence. Finally reason over compliance using only visible evidence. Return ONLY valid JSON matching this shape:
 {"productName":"string","category":"string","brand":"string","summary":"string","visionPipeline":{"cnn":{"status":"PASS|REVIEW","labelDetected":true,"legibility":"HIGH|MEDIUM|LOW","regions":["string"],"notes":["string"]},"ocr":{"status":"PASS|REVIEW","text":"string","fieldsDetected":["string"]},"aiVision":{"status":"PASS|REVIEW","evidence":["string"],"reasoning":"string"}},"barcodeInfo":{"detected":true,"value":"string","productName":"string","brand":"string","category":"string","status":"FOUND|NOT_FOUND|NOT_PROVIDED"},"qrInfo":{"detected":true,"content":"string","type":"URL|TEXT|NOT_FOUND","verificationStatus":"SAFE_TO_REVIEW|DO_NOT_OPEN_AUTOMATICALLY|NOT_FOUND"},"extractedInfo":{"mrp":"string","netQuantity":"string","batchLot":"string","manufacturingDate":"string","expiryBestBefore":"string","manufacturer":"string","manufacturerAddress":"string","consumerCare":"string","countryOfOrigin":"string","otherDeclarations":["string"]},"complianceScore":72,"complianceStatus":"COMPLIANT|NEEDS_REVIEW|NON_COMPLIANT","aiConfidence":{"productDetection":"HIGH|MEDIUM|LOW","ocr":"HIGH|MEDIUM|LOW","codeDetection":"HIGH|MEDIUM|LOW","compliance":"HIGH|MEDIUM|LOW","overall":"HIGH|MEDIUM|LOW"},"compliance":[{"label":"MRP|Net Quantity|Mfg / Expiry Date|Manufacturer|Consumer Care|Country of Origin|Label Legibility|Batch / Lot","status":"PASS|FAIL|REVIEW","value":"string","confidence":"HIGH|MEDIUM|LOW"}],"violations":[{"name":"string","reason":"string","confidence":"HIGH|MEDIUM|LOW"}],"warnings":["string"],"health":{"ingredients":["string"],"nutriScore":"A|B|C|D|E|UNKNOWN","allergens":["string"],"additives":["string"]},"technology":{"specifications":["string"]},"market":{"observedPrice":"string","pricePerUnit":"string","brandVerification":"VERIFIED|UNVERIFIED|REVIEW","comparisons":[{"seller":"string","price":"string","unitPrice":"string"}],"recommendations":["string"]},"report":{"findings":["string"],"actions":["string"]}}
-Read only visible evidence. Use UNKNOWN or REVIEW when not legible. Never invent product details, prices, dates, manufacturers, certifications, or decoded code content. Calculate complianceScore from the checks. A missing or unclear mandatory declaration should be a violation or warning with a simple evidence-based reason. For non-food items, leave health arrays empty and use UNKNOWN for nutriScore.`
+Read only visible evidence. Use UNKNOWN or REVIEW when not legible. Never invent product details, prices, dates, manufacturers, certifications, or decoded code content. Always fill productName, brand (company name), category, extractedInfo.mrp, extractedInfo.manufacturer, extractedInfo.netQuantity, extractedInfo.expiryBestBefore, and market.observedPrice from visible evidence when present; otherwise return the exact fallback UNKNOWN or Not visible. Calculate complianceScore from the checks. A missing or unclear mandatory declaration should be a violation or warning with a simple evidence-based reason. For non-food items, leave health arrays empty and use UNKNOWN for nutriScore.`
 
 const extractJsonObject = (content) => {
   const text = String(content || '').replace(/```(?:json)?/gi, '').replace(/```/g, '').trim()
@@ -98,6 +98,8 @@ const isPlaceholder = (value) => {
 }
 
 const cleanString = (value, fallback = '') => isPlaceholder(value) ? fallback : String(value || fallback)
+const defaultExtractedInfo = { mrp: 'UNKNOWN', netQuantity: 'UNKNOWN', batchLot: 'UNKNOWN', manufacturingDate: 'UNKNOWN', expiryBestBefore: 'UNKNOWN', manufacturer: 'UNKNOWN', manufacturerAddress: 'UNKNOWN', consumerCare: 'UNKNOWN', countryOfOrigin: 'UNKNOWN', otherDeclarations: [] }
+const defaultMarket = { observedPrice: 'Not visible', pricePerUnit: 'Not available', brandVerification: 'REVIEW', comparisons: [], recommendations: [] }
 
 const normalizeReport = (report, suppliedCodes = {}) => ({
   productName: cleanString(report.productName, 'Unidentified packaged commodity'),
@@ -107,7 +109,7 @@ const normalizeReport = (report, suppliedCodes = {}) => ({
   visionPipeline: report.visionPipeline || { cnn: { status: 'REVIEW', labelDetected: false, legibility: 'LOW', regions: [], notes: ['Visual pipeline details were not returned.'] }, ocr: { status: 'REVIEW', text: '', fieldsDetected: [] }, aiVision: { status: 'REVIEW', evidence: [], reasoning: 'Review the image manually.' } },
   barcodeInfo: suppliedCodes.barcode ? { detected: true, value: suppliedCodes.barcode, productName: cleanString(report.barcodeInfo?.productName), brand: cleanString(report.barcodeInfo?.brand), category: cleanString(report.barcodeInfo?.category), status: 'FOUND' } : { detected: false, value: '', productName: '', brand: '', category: '', status: 'NOT_PROVIDED' },
   qrInfo: suppliedCodes.qrContent ? { detected: true, content: suppliedCodes.qrContent, type: /^https?:\/\//i.test(suppliedCodes.qrContent) ? 'URL' : 'TEXT', verificationStatus: /^https?:\/\//i.test(suppliedCodes.qrContent) ? 'DO_NOT_OPEN_AUTOMATICALLY' : 'SAFE_TO_REVIEW' } : { detected: false, content: '', type: 'NOT_FOUND', verificationStatus: 'NOT_FOUND' },
-  extractedInfo: report.extractedInfo || { mrp: 'UNKNOWN', netQuantity: 'UNKNOWN', batchLot: 'UNKNOWN', manufacturingDate: 'UNKNOWN', expiryBestBefore: 'UNKNOWN', manufacturer: 'UNKNOWN', manufacturerAddress: 'UNKNOWN', consumerCare: 'UNKNOWN', countryOfOrigin: 'UNKNOWN', otherDeclarations: [] },
+  extractedInfo: { ...defaultExtractedInfo, ...(report.extractedInfo || {}) },
   complianceScore: Number.isFinite(Number(report.complianceScore)) ? Math.max(0, Math.min(100, Number(report.complianceScore))) : 0,
   complianceStatus: ['COMPLIANT', 'NEEDS_REVIEW', 'NON_COMPLIANT'].includes(report.complianceStatus) ? report.complianceStatus : 'NEEDS_REVIEW',
   aiConfidence: report.aiConfidence || { productDetection: 'LOW', ocr: 'LOW', codeDetection: 'LOW', compliance: 'LOW', overall: 'LOW' },
@@ -116,7 +118,7 @@ const normalizeReport = (report, suppliedCodes = {}) => ({
   warnings: Array.isArray(report.warnings) ? report.warnings.filter((item) => !isPlaceholder(item)).map((item) => String(item)) : [],
   health: report.health || { ingredients: [], nutriScore: 'UNKNOWN', allergens: [], additives: [] },
   technology: report.technology || { specifications: [] },
-  market: report.market || { observedPrice: 'Not visible', pricePerUnit: 'Not available', brandVerification: 'REVIEW', comparisons: [], recommendations: [] },
+  market: { ...defaultMarket, ...(report.market || {}) },
   report: report.report || { findings: [], actions: [] },
 })
 
