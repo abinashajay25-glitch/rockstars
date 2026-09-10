@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
-import { readBarcodesFromImageData } from 'zxing-wasm'
+import { BrowserMultiFormatReader } from '@zxing/browser'
 import { jsPDF } from 'jspdf'
 import './App.css'
 
@@ -72,123 +72,124 @@ const normalizeBarcodeFormat = (formatStr: string, isQr: boolean): string => {
   if (upper.includes('UPC-E') || upper.includes('UPCE')) return 'UPC-E'
   if (upper.includes('CODE-128') || upper.includes('CODE128')) return 'Code-128'
   if (upper.includes('CODE-39') || upper.includes('CODE39')) return 'Code-39'
-  if (upper.includes('DATAMATRIX') || upper.includes('DATA-MATRIX')) return 'Data Matrix'
+  if (upper.includes('DATA-MATRIX')) return 'Data Matrix'
   if (upper.includes('PDF-417') || upper.includes('PDF417')) return 'PDF417'
   if (upper.includes('AZTEC')) return 'Aztec'
   if (upper.includes('ITF')) return 'ITF'
-  if (upper.includes('CODABAR')) return 'Codabar'
   return upper || 'EAN-13'
 }
 
-// Client-side multi-pass barcode decoder using zxing-wasm + BarcodeDetector API
-const drawRotatedImage = (canvas: HTMLCanvasElement, img: HTMLImageElement, angle: number, filter: string) => {
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return
-  const w = img.naturalWidth || img.width
-  const h = img.naturalHeight || img.height
-  if (angle === 90 || angle === 270) {
-    canvas.width = h; canvas.height = w
-  } else {
-    canvas.width = w; canvas.height = h
-  }
-  ctx.save()
-  ctx.filter = filter
-  ctx.translate(canvas.width / 2, canvas.height / 2)
-  ctx.rotate((angle * Math.PI) / 180)
-  ctx.drawImage(img, -w / 2, -h / 2, w, h)
-  ctx.restore()
-}
-
-const decodeCanvasZxingWasm = async (canvas: HTMLCanvasElement): Promise<{ type: 'BARCODE' | 'QR'; format: string; value: string } | null> => {
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return null
-  try {
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-    const results = await readBarcodesFromImageData(imageData, {
-      formats: [],
-      tryHarder: true,
-      tryRotate: false,
-      tryInvert: true,
-      tryDownscale: true,
-      tryDenoise: true,
-    })
-    if (results && results.length > 0) {
-      const r = results[0]
-      const val = r.text
-      if (val) {
-        const fmt = r.format || ''
-        const isQr = fmt.toLowerCase().includes('qr') || fmt.toLowerCase().includes('datamatrix')
-        return { type: isQr ? 'QR' : 'BARCODE', format: normalizeBarcodeFormat(fmt, isQr), value: val }
-      }
-    }
-  } catch { /* continue */ }
-  return null
-}
-
-const decodeCanvasNative = async (canvas: HTMLCanvasElement, NativeDetector: any): Promise<{ type: 'BARCODE' | 'QR'; format: string; value: string } | null> => {
-  if (!NativeDetector) return null
-  try {
-    const detected = await NativeDetector.detect(canvas)
-    if (Array.isArray(detected) && detected.length > 0) {
-      const item = detected[0]
-      const val = item.rawValue || item.text
-      if (val) {
-        const isQr = (item.format || '').toLowerCase().includes('qr')
-        return { type: isQr ? 'QR' : 'BARCODE', format: normalizeBarcodeFormat(item.format || '', isQr), value: val }
-      }
-    }
-  } catch { /* continue */ }
-  return null
-}
-
+// Client-side multi-pass canvas decoder with rotation & contrast preprocessing
 const scanImageCanvas = async (imageSrc: string): Promise<{ type: 'BARCODE' | 'QR'; format: string; value: string } | null> => {
   return new Promise((resolve) => {
     const img = new Image()
     img.crossOrigin = 'anonymous'
     img.onload = async () => {
       try {
-        const NativeDetector = (window as any).BarcodeDetector
-          ? new (window as any).BarcodeDetector({
-              formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'qr_code', 'data_matrix', 'pdf417', 'aztec', 'itf', 'codabar'],
-            })
-          : null
+        const origWidth = img.naturalWidth || img.width
+        const origHeight = img.naturalHeight || img.height
+        
+        const maxDim = 1200
+        let scale = 1
+        if (Math.max(origWidth, origHeight) > maxDim) {
+          scale = maxDim / Math.max(origWidth, origHeight)
+        }
+        const width = Math.round(origWidth * scale)
+        const height = Math.round(origHeight * scale)
 
         const canvas = document.createElement('canvas')
-
-        const passes: Array<{ angle: number; filter: string }> = [
-          { angle: 0,   filter: 'none' },
-          { angle: 0,   filter: 'contrast(180%) grayscale(100%)' },
-          { angle: 90,  filter: 'none' },
-          { angle: 180, filter: 'none' },
-          { angle: 270, filter: 'none' },
-          { angle: 0,   filter: 'contrast(250%) brightness(110%) grayscale(100%)' },
-          { angle: 90,  filter: 'contrast(180%) grayscale(100%)' },
-          { angle: 270, filter: 'contrast(180%) grayscale(100%)' },
-        ]
-
-        for (const { angle, filter } of passes) {
-          drawRotatedImage(canvas, img, angle, filter)
-          const native = await decodeCanvasNative(canvas, NativeDetector)
-          if (native) { resolve(native); return }
-          const wasm = await decodeCanvasZxingWasm(canvas)
-          if (wasm) { resolve(wasm); return }
-        }
-
-        // Center-crop pass: zoom into center 60% of image
-        const w = img.naturalWidth || img.width
-        const h = img.naturalHeight || img.height
-        canvas.width = w; canvas.height = h
         const ctx = canvas.getContext('2d')
-        if (ctx) {
-          ctx.filter = 'contrast(200%) grayscale(100%)'
-          const cropX = w * 0.2, cropY = h * 0.2, cropW = w * 0.6, cropH = h * 0.6
-          ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, w, h)
-          ctx.filter = 'none'
-          const cropNative = await decodeCanvasNative(canvas, NativeDetector)
-          if (cropNative) { resolve(cropNative); return }
-          const cropWasm = await decodeCanvasZxingWasm(canvas)
-          if (cropWasm) { resolve(cropWasm); return }
+        if (!ctx) { resolve(null); return }
+
+        const zxingReader = new BrowserMultiFormatReader()
+        const NativeDetector = (window as any).BarcodeDetector ? new (window as any).BarcodeDetector({
+          formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'qr_code', 'data_matrix', 'pdf417', 'aztec', 'itf', 'codabar']
+        }) : null
+
+        const tryDecodeCanvas = async (): Promise<{ type: 'BARCODE' | 'QR'; format: string; value: string } | null> => {
+          if (NativeDetector) {
+            try {
+              const detected = await NativeDetector.detect(canvas)
+              if (Array.isArray(detected) && detected.length > 0) {
+                const item = detected[0]
+                const val = item.rawValue || item.text
+                if (val) {
+                  const isQr = (item.format || '').toLowerCase().includes('qr')
+                  return {
+                    type: isQr ? 'QR' : 'BARCODE',
+                    format: normalizeBarcodeFormat(item.format || '', isQr),
+                    value: val
+                  }
+                }
+              }
+            } catch { /* continue */ }
+          }
+          try {
+            const dataUrl = canvas.toDataURL('image/png')
+            const res = await zxingReader.decodeFromImageUrl(dataUrl)
+            if (res) {
+              const val = res.getText()
+              const fmt = res.getBarcodeFormat() ? res.getBarcodeFormat().toString() : ''
+              const isQr = fmt.toLowerCase().includes('qr')
+              return {
+                type: isQr ? 'QR' : 'BARCODE',
+                format: normalizeBarcodeFormat(fmt, isQr),
+                value: val
+              }
+            }
+          } catch { /* continue */ }
+          return null
         }
+
+        const angles = [0, 90, 180, 270]
+        const filters = ['none', 'contrast(160%) grayscale(100%)']
+
+        for (const filter of filters) {
+          for (const angle of angles) {
+            ctx.filter = filter
+            if (angle === 0) {
+              canvas.width = width
+              canvas.height = height
+              ctx.drawImage(img, 0, 0, width, height)
+            } else if (angle === 90) {
+              canvas.width = height
+              canvas.height = width
+              ctx.translate(height / 2, width / 2)
+              ctx.rotate((90 * Math.PI) / 180)
+              ctx.drawImage(img, -width / 2, -height / 2, width, height)
+              ctx.setTransform(1, 0, 0, 1, 0, 0)
+            } else if (angle === 180) {
+              canvas.width = width
+              canvas.height = height
+              ctx.translate(width / 2, height / 2)
+              ctx.rotate((180 * Math.PI) / 180)
+              ctx.drawImage(img, -width / 2, -height / 2, width, height)
+              ctx.setTransform(1, 0, 0, 1, 0, 0)
+            } else if (angle === 270) {
+              canvas.width = height
+              canvas.height = width
+              ctx.translate(height / 2, width / 2)
+              ctx.rotate((270 * Math.PI) / 180)
+              ctx.drawImage(img, -width / 2, -height / 2, width, height)
+              ctx.setTransform(1, 0, 0, 1, 0, 0)
+            }
+
+            const match = await tryDecodeCanvas()
+            if (match) { resolve(match); return }
+          }
+        }
+
+        // Center crop pass (center 60% zoomed)
+        canvas.width = width
+        canvas.height = height
+        const cropX = Math.round(width * 0.2)
+        const cropY = Math.round(height * 0.2)
+        const cropW = Math.round(width * 0.6)
+        const cropH = Math.round(height * 0.6)
+        ctx.filter = 'contrast(180%) grayscale(100%)'
+        ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, width, height)
+        const cropMatch = await tryDecodeCanvas()
+        if (cropMatch) { resolve(cropMatch); return }
 
         resolve(null)
       } catch {
@@ -464,12 +465,7 @@ function App() {
     y += 54
     drawSection(labels.actions, [`${labels.findings}: ${valueStr(analysis.report.findings, 'No additional findings.')}`, `${labels.nextActions}: ${valueStr(analysis.report.actions, 'No additional actions.')}`].join('\n'), margin, y, contentWidth, 45)
     y += 51
-    const provenanceNote = language === 'தமிழ்'
-      ? `Report language: Tamil (தமிழ்). Section headings are in Tamil. Body data is in English as the PDF font supports Latin characters only. Verify all fields against the physical package.`
-      : language === 'हिन्दी'
-      ? `Report language: Hindi (हिन्दी). Section headings are in Hindi. Body data is in English as the PDF font supports Latin characters only. Verify all fields against the physical package.`
-      : `${labels.reportLanguage}: ${language}. Generated from the uploaded package image, OCR, barcode or QR evidence, and AI label analysis. Unclear fields remain marked for review and should be verified against the physical package.`
-    drawSection(labels.provenance, provenanceNote, margin, y, contentWidth, 35)
+    drawSection(labels.provenance, `${labels.reportLanguage}: ${language}. Generated from the uploaded package image, OCR, barcode or QR evidence, and AI label analysis. Unclear fields remain marked for review and should be verified against the physical package.`, margin, y, contentWidth, 35)
 
     // PAGE 3 — BARCODE INTELLIGENCE (only when barcode detected)
     if (hasBarcode) {
@@ -596,145 +592,81 @@ function App() {
     const bNumber = analysis.barcodeInfo?.value || decodedCode?.value || ''
 
     if (language === 'தமிழ்') {
-      parts.push(`தயாரிப்பு ஆய்வு அறிக்கை.`)
-      parts.push(`தயாரிப்பு: ${analysis.productName}.`)
-      parts.push(`பிராண்ட்: ${infoText(analysis.brand)}. வகை: ${infoText(analysis.category)}.`)
+      parts.push(`அறிக்கை: ${analysis.productName}.`)
+      parts.push(`பிராண்ட்: ${infoText(analysis.brand)}, வகை: ${infoText(analysis.category)}.`)
       if (bDetected) {
-        parts.push(`பார்கோடு கண்டறியப்பட்டது. வகை: ${bType}. எண்: ${bNumber}.`)
+        parts.push(`பார்கோடு கண்டறியப்பட்டது. வகை: ${bType}, எண்: ${bNumber}.`)
       }
-      parts.push(`இணக்க மதிப்பெண்: ${analysis.complianceScore} சதவீதம். நிலை: ${analysis.complianceStatus.replace('_', ' ')}.`)
-      parts.push(`அதிகபட்ச சில்லறை விலை: ${infoText(analysis.extractedInfo.mrp)}.`)
+      parts.push(`இணக்க மதிப்பெண்: ${analysis.complianceScore} சதவீதம். நிலை: ${analysis.complianceStatus}.`)
+      parts.push(`அதிகபட்ச சில்லறை விலை MRP: ${infoText(analysis.extractedInfo.mrp)}.`)
       parts.push(`நிகர அளவு: ${infoText(analysis.extractedInfo.netQuantity)}.`)
-      parts.push(`தயாரிப்பு தேதி: ${infoText(analysis.extractedInfo.manufacturingDate)}.`)
-      parts.push(`காலாவதி தேதி: ${infoText(analysis.extractedInfo.expiryBestBefore)}.`)
+      parts.push(`தயாரிப்பு தேதி: ${infoText(analysis.extractedInfo.manufacturingDate)}, காலாவதி தேதி: ${infoText(analysis.extractedInfo.expiryBestBefore)}.`)
       parts.push(`தயாரிப்பாளர்: ${infoText(analysis.extractedInfo.manufacturer)}.`)
       parts.push(`நாட்டின் தோற்றம்: ${infoText(analysis.extractedInfo.countryOfOrigin)}.`)
-      if (analysis.health.ingredients.length) {
-        parts.push(`பொருட்கள்: ${infoText(analysis.health.ingredients)}.`)
-      }
-      if (analysis.health.allergens.length) {
-        parts.push(`ஒவ்வாமை பொருட்கள்: ${infoText(analysis.health.allergens)}.`)
-      }
-      parts.push(`ஊட்ட மதிப்பெண்: ${analysis.health.nutriScore}.`)
+      parts.push(`பொருட்கள்: ${infoText(analysis.health.ingredients)}.`)
       if (analysis.violations.length) {
         parts.push(`மீறல்கள்: ${analysis.violations.map(v => `${v.name}, ${v.reason}`).join('. ')}.`)
       } else {
         parts.push(`மீறல்கள் எதுவும் இல்லை.`)
       }
-      if (analysis.warnings.length) {
-        parts.push(`எச்சரிக்கைகள்: ${analysis.warnings.join('. ')}.`)
-      }
       parts.push(`கண்டறிதல்கள்: ${analysis.report.findings.join('. ') || 'எதுவுமில்லை'}.`)
-      parts.push(`அடுத்த செயல்கள்: ${analysis.report.actions.join('. ') || 'எதுவுமில்லை'}.`)
     } else if (language === 'हिन्दी') {
-      parts.push(`उत्पाद निरीक्षण रिपोर्ट.`)
-      parts.push(`उत्पाद: ${analysis.productName}.`)
-      parts.push(`ब्रांड: ${infoText(analysis.brand)}. श्रेणी: ${infoText(analysis.category)}.`)
+      parts.push(`रिपोर्ट: ${analysis.productName}.`)
+      parts.push(`ब्रांड: ${infoText(analysis.brand)}, श्रेणी: ${infoText(analysis.category)}.`)
       if (bDetected) {
-        parts.push(`बारकोड का पता चला. प्रकार: ${bType}. संख्या: ${bNumber}.`)
+        parts.push(`बारकोड का पता चला. प्रकार: ${bType}, संख्या: ${bNumber}.`)
       }
-      parts.push(`अनुपालन स्कोर: ${analysis.complianceScore} प्रतिशत. स्थिति: ${analysis.complianceStatus.replace('_', ' ')}.`)
-      parts.push(`अधिकतम खुदरा मूल्य: ${infoText(analysis.extractedInfo.mrp)}.`)
+      parts.push(`अनुपालन स्कोर: ${analysis.complianceScore} प्रतिशत. स्थिति: ${analysis.complianceStatus}.`)
+      parts.push(`अधिकतम खुदरा मूल्य MRP: ${infoText(analysis.extractedInfo.mrp)}.`)
       parts.push(`शुद्ध मात्रा: ${infoText(analysis.extractedInfo.netQuantity)}.`)
-      parts.push(`निर्माण तिथि: ${infoText(analysis.extractedInfo.manufacturingDate)}.`)
-      parts.push(`समाप्ति तिथि: ${infoText(analysis.extractedInfo.expiryBestBefore)}.`)
+      parts.push(`निर्माण तिथि: ${infoText(analysis.extractedInfo.manufacturingDate)}, समाप्ति तिथि: ${infoText(analysis.extractedInfo.expiryBestBefore)}.`)
       parts.push(`निर्माता: ${infoText(analysis.extractedInfo.manufacturer)}.`)
       parts.push(`मूल देश: ${infoText(analysis.extractedInfo.countryOfOrigin)}.`)
-      if (analysis.health.ingredients.length) {
-        parts.push(`सामग्री: ${infoText(analysis.health.ingredients)}.`)
-      }
-      if (analysis.health.allergens.length) {
-        parts.push(`एलर्जेन: ${infoText(analysis.health.allergens)}.`)
-      }
-      parts.push(`न्यूट्री-स्कोर: ${analysis.health.nutriScore}.`)
+      parts.push(`सामग्री: ${infoText(analysis.health.ingredients)}.`)
       if (analysis.violations.length) {
         parts.push(`उल्लंघन: ${analysis.violations.map(v => `${v.name}, ${v.reason}`).join('. ')}.`)
       } else {
         parts.push(`कोई उल्लंघन नहीं पाया गया.`)
       }
-      if (analysis.warnings.length) {
-        parts.push(`चेतावनियां: ${analysis.warnings.join('. ')}.`)
-      }
       parts.push(`निष्कर्ष: ${analysis.report.findings.join('. ') || 'कोई नहीं'}.`)
-      parts.push(`अगले कदम: ${analysis.report.actions.join('. ') || 'कोई नहीं'}.`)
     } else {
-      parts.push(`Product inspection report for ${analysis.productName}.`)
+      parts.push(`Inspection report for ${analysis.productName}.`)
       parts.push(`Brand: ${infoText(analysis.brand)}. Category: ${infoText(analysis.category)}.`)
       if (bDetected) {
         parts.push(`Barcode detected. Type: ${bType}. Number: ${bNumber}.`)
       }
-      parts.push(`Compliance score: ${analysis.complianceScore} percent. Overall status: ${analysis.complianceStatus.replace('_', ' ')}.`)
-      parts.push(`Maximum Retail Price: ${infoText(analysis.extractedInfo.mrp)}.`)
+      parts.push(`Compliance score: ${analysis.complianceScore} percent. Overall status: ${analysis.complianceStatus}.`)
+      parts.push(`Maximum Retail Price MRP: ${infoText(analysis.extractedInfo.mrp)}.`)
       parts.push(`Net quantity: ${infoText(analysis.extractedInfo.netQuantity)}.`)
-      parts.push(`Manufacturing date: ${infoText(analysis.extractedInfo.manufacturingDate)}.`)
-      parts.push(`Expiry or best before: ${infoText(analysis.extractedInfo.expiryBestBefore)}.`)
+      parts.push(`Manufacturing date: ${infoText(analysis.extractedInfo.manufacturingDate)}. Expiry or best before: ${infoText(analysis.extractedInfo.expiryBestBefore)}.`)
       parts.push(`Manufacturer: ${infoText(analysis.extractedInfo.manufacturer)}.`)
       parts.push(`Country of origin: ${infoText(analysis.extractedInfo.countryOfOrigin)}.`)
-      if (analysis.health.ingredients.length) {
-        parts.push(`Ingredients: ${infoText(analysis.health.ingredients)}.`)
-      }
-      if (analysis.health.allergens.length) {
-        parts.push(`Allergens: ${infoText(analysis.health.allergens)}.`)
-      }
-      parts.push(`Nutri-Score: ${analysis.health.nutriScore}.`)
+      parts.push(`Ingredients: ${infoText(analysis.health.ingredients)}.`)
       if (analysis.violations.length) {
         parts.push(`Violations found: ${analysis.violations.map(v => `${v.name}: ${v.reason}`).join('. ')}.`)
       } else {
         parts.push(`No compliance violations found.`)
       }
-      if (analysis.warnings.length) {
-        parts.push(`Warnings: ${analysis.warnings.join('. ')}.`)
-      }
       parts.push(`Findings: ${analysis.report.findings.join('. ') || 'None'}.`)
-      parts.push(`Next actions: ${analysis.report.actions.join('. ') || 'None'}.`)
     }
 
     const fullText = parts.join(' ')
+    const utterance = new SpeechSynthesisUtterance(fullText)
+    const targetPrefix = language === 'தமிழ்' ? 'ta' : language === 'हिन्दी' ? 'hi' : 'en'
+    utterance.lang = language === 'தமிழ்' ? 'ta-IN' : language === 'हिन्दी' ? 'hi-IN' : 'en-IN'
 
-    // Pick voice language codes
-    const langCode = language === 'தமிழ்' ? 'ta-IN' : language === 'हिन्दी' ? 'hi-IN' : 'en-IN'
-    const langPrefix = language === 'தமிழ்' ? 'ta' : language === 'हिन्दी' ? 'hi' : 'en'
-
-    const buildAndSpeak = (voices: SpeechSynthesisVoice[]) => {
-      const utterance = new SpeechSynthesisUtterance(fullText)
-      utterance.lang = langCode
-      utterance.rate = 0.92
-      utterance.pitch = 1.0
-
-      // Prefer exact language match, then prefix match, then any English voice
-      const voice =
-        voices.find(v => v.lang.toLowerCase() === langCode.toLowerCase()) ||
-        voices.find(v => v.lang.toLowerCase().startsWith(langPrefix)) ||
-        voices.find(v => v.lang.toLowerCase().startsWith('en'))
-      if (voice) utterance.voice = voice
-
-      utterance.onstart = () => setSpeechStatus('READING')
-      utterance.onend = () => setSpeechStatus('READY')
-      utterance.onerror = (e) => {
-        // Retry once on error (Chrome mobile bug)
-        if (e.error !== 'interrupted') setSpeechStatus('STOPPED')
-      }
-
-      window.speechSynthesis.speak(utterance)
-    }
-
-    // getVoices() is async on Chrome — voices may not be loaded on first call.
-    // Wait for the voiceschanged event if the list is empty.
     const voices = window.speechSynthesis.getVoices()
-    if (voices.length > 0) {
-      buildAndSpeak(voices)
-    } else {
-      const onVoicesChanged = () => {
-        window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged)
-        buildAndSpeak(window.speechSynthesis.getVoices())
-      }
-      window.speechSynthesis.addEventListener('voiceschanged', onVoicesChanged)
-      // Safety timeout: speak anyway after 1.5s even if event never fires
-      setTimeout(() => {
-        window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged)
-        buildAndSpeak(window.speechSynthesis.getVoices())
-      }, 1500)
+    const matchingVoice = voices.find(v => v.lang.toLowerCase().startsWith(targetPrefix)) ||
+                          voices.find(v => v.lang.toLowerCase().startsWith('en'))
+    if (matchingVoice) {
+      utterance.voice = matchingVoice
     }
+
+    utterance.onstart = () => setSpeechStatus('READING')
+    utterance.onend = () => setSpeechStatus('READY')
+    utterance.onerror = () => setSpeechStatus('STOPPED')
+
+    window.speechSynthesis.speak(utterance)
   }
 
   const openHistory = (entry: ScanHistoryItem) => { setAnalysis(entry.analysis); window.location.hash = 'validator' }
@@ -782,21 +714,17 @@ function App() {
         onClick={speakReport}
         disabled={!analysis}
       >
-        ▶ {text.voice}
+        ▶ READ REPORT
       </button>
       <button
         className="stop-report-button"
         type="button"
         onClick={stopSpeech}
       >
-        ■ {language === 'தமிழ்' ? 'நிறுத்து' : language === 'हिन्दी' ? 'रोकें' : 'STOP'}
+        ■ STOP
       </button>
       <span className={`speech-status-pill status-${speechStatus.toLowerCase()}`}>
-        {speechStatus === 'READING'
-          ? (language === 'தமிழ்' ? '🔊 வாசிக்கிறது' : language === 'हिन्दी' ? '🔊 बोल रहा है' : '🔊 READING')
-          : speechStatus === 'STOPPED'
-          ? (language === 'தமிழ்' ? '⏹ நிறுத்தப்பட்டது' : language === 'हिन्दी' ? '⏹ रुका' : '⏹ STOPPED')
-          : (language === 'தமிழ்' ? '✓ தயார்' : language === 'हिन्दी' ? '✓ तैयार' : '✓ READY')}
+        Status: {speechStatus}
       </span>
     </div>
     </div>}</div>{!analysis ? <div className="empty-readout"><span>+</span><p>{text.start}</p></div> : <><div className="analysis-summary"><div><p>{analysis.summary}</p><small>{analysis.category} / {analysis.brand}</small></div><div className="score"><span>Compliance score</span><strong>{analysis.complianceScore}%</strong><small>{analysis.complianceStatus.replace('_', ' ')} · {analysis.aiConfidence.overall} confidence</small></div></div><div className="code-result"><strong>{analysis.barcodeInfo.detected ? 'Barcode detected' : analysis.qrInfo.detected ? 'QR Detected' : 'Code scan'}</strong><span>{analysis.barcodeInfo.value || analysis.qrInfo.content || 'Product information not found — continuing with package analysis.'}</span>{analysis.barcodeInfo.detected && <><span>Type: {analysis.barcodeInfo.format || decodedCode?.format || 'EAN-13'}</span><span>Number: {analysis.barcodeInfo.value}</span><span>Product: {infoText(analysis.barcodeInfo.productName || analysis.productName)}</span><span>Brand: {infoText(analysis.barcodeInfo.brand || analysis.brand)}</span><span>Category: {infoText(analysis.barcodeInfo.category || analysis.category)}</span><span>MRP: {infoText(analysis.extractedInfo.mrp)}</span><span>Net Quantity: {infoText(analysis.extractedInfo.netQuantity)}</span><span>Mfg Date: {infoText(analysis.extractedInfo.manufacturingDate)}</span><span>Expiry Date: {infoText(analysis.extractedInfo.expiryBestBefore)}</span><span>Manufacturer: {infoText(analysis.extractedInfo.manufacturer)}</span><span>Consumer Care: {infoText(analysis.extractedInfo.consumerCare)}</span><span>Country of Origin: {infoText(analysis.extractedInfo.countryOfOrigin)}</span><span>Compliance: {displayOverallStatus(analysis.complianceStatus)}</span></>}<small>{analysis.qrInfo.detected ? `Verification Status: ${analysis.qrInfo.verificationStatus}` : `Barcode / QR detection confidence: ${analysis.aiConfidence.codeDetection}`}</small></div><div className="confidence-strip"><span>Product: {analysis.aiConfidence.productDetection}</span><span>OCR: {analysis.aiConfidence.ocr}</span><span>Compliance: {analysis.aiConfidence.compliance}</span><span>Overall: {analysis.aiConfidence.overall}</span></div><div className="compliance-grid">{analysis.compliance.map((item) => <article className={`check-card ${item.status.toLowerCase()}`} key={item.label}><div><span>{item.status === 'PASS' ? '✓' : item.status === 'FAIL' ? '×' : '?'}</span><h3>{item.label}</h3></div><strong>{displayCheckStatus(item.status)}</strong><p>{item.value}</p><small>{item.confidence} confidence</small></article>)}</div><div className="violation-panel"><h3>Violations and warnings</h3>{analysis.violations.map((item) => <p key={item.name}>❌ <b>{item.name}</b> — {item.reason} <small>({item.confidence})</small></p>)}{analysis.warnings.map((item) => <p key={item}>⚠ {item}</p>)}{!analysis.violations.length && !analysis.warnings.length && <p>No violations detected from visible evidence.</p>}</div><div className="intel-grid" id="intel"><article><p className="kicker">03 / {text.healthTech}</p><h3>{text.inside}</h3><p><b>Nutri-Score:</b> {analysis.health.nutriScore}</p><p><b>Ingredients:</b> {analysis.health.ingredients.join(', ') || 'Not visible'}</p><p><b>Allergens:</b> {analysis.health.allergens.join(', ') || 'None detected'}</p><p><b>Additives:</b> {analysis.health.additives.join(', ') || 'None detected'}</p><p><b>Specifications:</b> {analysis.technology.specifications.join(', ') || 'Not applicable'}</p></article><article><p className="kicker">04 / {text.market}</p><h3>{text.price}</h3><p><b>Observed MRP:</b> {analysis.market.observedPrice}</p><p><b>Unit price:</b> {analysis.market.pricePerUnit}</p><p><b>Brand:</b> {analysis.market.brandVerification}</p>{analysis.market.recommendations.map((item) => <p key={item}>→ {item}</p>)}</article></div><div className="report-block"><article><p className="kicker">05 / {text.report}</p><h3>Findings</h3>{analysis.report.findings.map((item) => <p key={item}>→ {item}</p>)}</article><article><p className="kicker">Next actions</p>{analysis.report.actions.map((item) => <p key={item}>→ {item}</p>)}</article></div></>}</section>
