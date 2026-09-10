@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
-import { BrowserMultiFormatReader } from '@zxing/browser'
+import { readBarcodesFromImageData } from 'zxing-wasm'
 import { jsPDF } from 'jspdf'
 import './App.css'
 
@@ -72,124 +72,123 @@ const normalizeBarcodeFormat = (formatStr: string, isQr: boolean): string => {
   if (upper.includes('UPC-E') || upper.includes('UPCE')) return 'UPC-E'
   if (upper.includes('CODE-128') || upper.includes('CODE128')) return 'Code-128'
   if (upper.includes('CODE-39') || upper.includes('CODE39')) return 'Code-39'
-  if (upper.includes('DATA-MATRIX')) return 'Data Matrix'
+  if (upper.includes('DATAMATRIX') || upper.includes('DATA-MATRIX')) return 'Data Matrix'
   if (upper.includes('PDF-417') || upper.includes('PDF417')) return 'PDF417'
   if (upper.includes('AZTEC')) return 'Aztec'
   if (upper.includes('ITF')) return 'ITF'
+  if (upper.includes('CODABAR')) return 'Codabar'
   return upper || 'EAN-13'
 }
 
-// Client-side multi-pass canvas decoder with rotation & contrast preprocessing
+// Client-side multi-pass barcode decoder using zxing-wasm + BarcodeDetector API
+const drawRotatedImage = (canvas: HTMLCanvasElement, img: HTMLImageElement, angle: number, filter: string) => {
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  const w = img.naturalWidth || img.width
+  const h = img.naturalHeight || img.height
+  if (angle === 90 || angle === 270) {
+    canvas.width = h; canvas.height = w
+  } else {
+    canvas.width = w; canvas.height = h
+  }
+  ctx.save()
+  ctx.filter = filter
+  ctx.translate(canvas.width / 2, canvas.height / 2)
+  ctx.rotate((angle * Math.PI) / 180)
+  ctx.drawImage(img, -w / 2, -h / 2, w, h)
+  ctx.restore()
+}
+
+const decodeCanvasZxingWasm = async (canvas: HTMLCanvasElement): Promise<{ type: 'BARCODE' | 'QR'; format: string; value: string } | null> => {
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+  try {
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const results = await readBarcodesFromImageData(imageData, {
+      formats: [],
+      tryHarder: true,
+      tryRotate: false,
+      tryInvert: true,
+      tryDownscale: true,
+      tryDenoise: true,
+    })
+    if (results && results.length > 0) {
+      const r = results[0]
+      const val = r.text
+      if (val) {
+        const fmt = r.format || ''
+        const isQr = fmt.toLowerCase().includes('qr') || fmt.toLowerCase().includes('datamatrix')
+        return { type: isQr ? 'QR' : 'BARCODE', format: normalizeBarcodeFormat(fmt, isQr), value: val }
+      }
+    }
+  } catch { /* continue */ }
+  return null
+}
+
+const decodeCanvasNative = async (canvas: HTMLCanvasElement, NativeDetector: any): Promise<{ type: 'BARCODE' | 'QR'; format: string; value: string } | null> => {
+  if (!NativeDetector) return null
+  try {
+    const detected = await NativeDetector.detect(canvas)
+    if (Array.isArray(detected) && detected.length > 0) {
+      const item = detected[0]
+      const val = item.rawValue || item.text
+      if (val) {
+        const isQr = (item.format || '').toLowerCase().includes('qr')
+        return { type: isQr ? 'QR' : 'BARCODE', format: normalizeBarcodeFormat(item.format || '', isQr), value: val }
+      }
+    }
+  } catch { /* continue */ }
+  return null
+}
+
 const scanImageCanvas = async (imageSrc: string): Promise<{ type: 'BARCODE' | 'QR'; format: string; value: string } | null> => {
   return new Promise((resolve) => {
     const img = new Image()
     img.crossOrigin = 'anonymous'
     img.onload = async () => {
       try {
-        const origWidth = img.naturalWidth || img.width
-        const origHeight = img.naturalHeight || img.height
-        
-        const maxDim = 1200
-        let scale = 1
-        if (Math.max(origWidth, origHeight) > maxDim) {
-          scale = maxDim / Math.max(origWidth, origHeight)
-        }
-        const width = Math.round(origWidth * scale)
-        const height = Math.round(origHeight * scale)
+        const NativeDetector = (window as any).BarcodeDetector
+          ? new (window as any).BarcodeDetector({
+              formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'qr_code', 'data_matrix', 'pdf417', 'aztec', 'itf', 'codabar'],
+            })
+          : null
 
         const canvas = document.createElement('canvas')
+
+        const passes: Array<{ angle: number; filter: string }> = [
+          { angle: 0,   filter: 'none' },
+          { angle: 0,   filter: 'contrast(180%) grayscale(100%)' },
+          { angle: 90,  filter: 'none' },
+          { angle: 180, filter: 'none' },
+          { angle: 270, filter: 'none' },
+          { angle: 0,   filter: 'contrast(250%) brightness(110%) grayscale(100%)' },
+          { angle: 90,  filter: 'contrast(180%) grayscale(100%)' },
+          { angle: 270, filter: 'contrast(180%) grayscale(100%)' },
+        ]
+
+        for (const { angle, filter } of passes) {
+          drawRotatedImage(canvas, img, angle, filter)
+          const native = await decodeCanvasNative(canvas, NativeDetector)
+          if (native) { resolve(native); return }
+          const wasm = await decodeCanvasZxingWasm(canvas)
+          if (wasm) { resolve(wasm); return }
+        }
+
+        // Center-crop pass: zoom into center 60% of image
+        const w = img.naturalWidth || img.width
+        const h = img.naturalHeight || img.height
+        canvas.width = w; canvas.height = h
         const ctx = canvas.getContext('2d')
-        if (!ctx) { resolve(null); return }
-
-        const zxingReader = new BrowserMultiFormatReader()
-        const NativeDetector = (window as any).BarcodeDetector ? new (window as any).BarcodeDetector({
-          formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'qr_code', 'data_matrix', 'pdf417', 'aztec', 'itf', 'codabar']
-        }) : null
-
-        const tryDecodeCanvas = async (): Promise<{ type: 'BARCODE' | 'QR'; format: string; value: string } | null> => {
-          if (NativeDetector) {
-            try {
-              const detected = await NativeDetector.detect(canvas)
-              if (Array.isArray(detected) && detected.length > 0) {
-                const item = detected[0]
-                const val = item.rawValue || item.text
-                if (val) {
-                  const isQr = (item.format || '').toLowerCase().includes('qr')
-                  return {
-                    type: isQr ? 'QR' : 'BARCODE',
-                    format: normalizeBarcodeFormat(item.format || '', isQr),
-                    value: val
-                  }
-                }
-              }
-            } catch { /* continue */ }
-          }
-          try {
-            const dataUrl = canvas.toDataURL('image/png')
-            const res = await zxingReader.decodeFromImageUrl(dataUrl)
-            if (res) {
-              const val = res.getText()
-              const fmt = res.getBarcodeFormat() ? res.getBarcodeFormat().toString() : ''
-              const isQr = fmt.toLowerCase().includes('qr')
-              return {
-                type: isQr ? 'QR' : 'BARCODE',
-                format: normalizeBarcodeFormat(fmt, isQr),
-                value: val
-              }
-            }
-          } catch { /* continue */ }
-          return null
+        if (ctx) {
+          ctx.filter = 'contrast(200%) grayscale(100%)'
+          const cropX = w * 0.2, cropY = h * 0.2, cropW = w * 0.6, cropH = h * 0.6
+          ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, w, h)
+          ctx.filter = 'none'
+          const cropNative = await decodeCanvasNative(canvas, NativeDetector)
+          if (cropNative) { resolve(cropNative); return }
+          const cropWasm = await decodeCanvasZxingWasm(canvas)
+          if (cropWasm) { resolve(cropWasm); return }
         }
-
-        const angles = [0, 90, 180, 270]
-        const filters = ['none', 'contrast(160%) grayscale(100%)']
-
-        for (const filter of filters) {
-          for (const angle of angles) {
-            ctx.filter = filter
-            if (angle === 0) {
-              canvas.width = width
-              canvas.height = height
-              ctx.drawImage(img, 0, 0, width, height)
-            } else if (angle === 90) {
-              canvas.width = height
-              canvas.height = width
-              ctx.translate(height / 2, width / 2)
-              ctx.rotate((90 * Math.PI) / 180)
-              ctx.drawImage(img, -width / 2, -height / 2, width, height)
-              ctx.setTransform(1, 0, 0, 1, 0, 0)
-            } else if (angle === 180) {
-              canvas.width = width
-              canvas.height = height
-              ctx.translate(width / 2, height / 2)
-              ctx.rotate((180 * Math.PI) / 180)
-              ctx.drawImage(img, -width / 2, -height / 2, width, height)
-              ctx.setTransform(1, 0, 0, 1, 0, 0)
-            } else if (angle === 270) {
-              canvas.width = height
-              canvas.height = width
-              ctx.translate(height / 2, width / 2)
-              ctx.rotate((270 * Math.PI) / 180)
-              ctx.drawImage(img, -width / 2, -height / 2, width, height)
-              ctx.setTransform(1, 0, 0, 1, 0, 0)
-            }
-
-            const match = await tryDecodeCanvas()
-            if (match) { resolve(match); return }
-          }
-        }
-
-        // Center crop pass (center 60% zoomed)
-        canvas.width = width
-        canvas.height = height
-        const cropX = Math.round(width * 0.2)
-        const cropY = Math.round(height * 0.2)
-        const cropW = Math.round(width * 0.6)
-        const cropH = Math.round(height * 0.6)
-        ctx.filter = 'contrast(180%) grayscale(100%)'
-        ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, width, height)
-        const cropMatch = await tryDecodeCanvas()
-        if (cropMatch) { resolve(cropMatch); return }
 
         resolve(null)
       } catch {
