@@ -14,7 +14,8 @@
     "@zxing/browser": "^0.2.1",
     "jspdf": "^4.2.1",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "zxing-wasm": "^3.1.3"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

@@ -105,16 +105,56 @@ const isPlaceholder = (value) => {
 
 const cleanString = (value, fallback = '') => isPlaceholder(value) ? fallback : String(value || fallback)
 
+const barcodeUnreadable = 'Barcode not readable — please upload a clearer image.'
+let barcodeReaderReady = false
+
+const ensureBarcodeReader = async () => {
+  if (barcodeReaderReady) return
+  const { prepareZXingModule } = await import('zxing-wasm/reader')
+  const wasmPath = join(root, 'node_modules/zxing-wasm/dist/reader/zxing_reader.wasm')
+  const wasm = await fs.readFile(wasmPath)
+  prepareZXingModule({ overrides: { wasmBinary: wasm.buffer.slice(wasm.byteOffset, wasm.byteOffset + wasm.byteLength) } })
+  barcodeReaderReady = true
+}
+
+const decodeMachineCode = async (image) => {
+  try {
+    await ensureBarcodeReader()
+    const { readBarcodes } = await import('zxing-wasm/reader')
+    const results = await readBarcodes(image, { tryHarder: true, maxNumberOfSymbols: 8 })
+    if (!Array.isArray(results) || !results.length) return { barcode: '', qrContent: '', format: '' }
+    const qr = results.find((item) => /qr/i.test(String(item.format)))
+    const barcode = results.find((item) => !/qr/i.test(String(item.format)))
+    const chosen = barcode || qr
+    return { barcode: barcode?.text || '', qrContent: qr?.text || '', format: String(chosen?.format || '') }
+  } catch {
+    return { barcode: '', qrContent: '', format: '' }
+  }
+}
+
 const lookupBarcode = async (barcode) => {
   if (!/^\d{8,14}$/.test(String(barcode))) return null
-  try {
-    const response = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json`, { headers: { Accept: 'application/json', 'User-Agent': 'RockstarLens/1.0 (packaged-compliance-checker)' }, signal: AbortSignal.timeout(5000) })
-    if (!response.ok) return null
-    const payload = await readJsonResponse(response)
-    if (payload.status !== 1 || !payload.product) return null
-    const product = payload.product
-    return { productName: product.product_name || product.product_name_en || '', brand: product.brands || '', category: product.categories || product.categories_tags?.join(', ') || '', ingredients: product.ingredients_text || product.ingredients_text_en || '', allergens: product.allergens || product.allergens_tags?.join(', ') || '', nutriScore: product.nutriscore_grade || 'UNKNOWN' }
-  } catch { return null }
+  const catalogs = ['https://world.openfoodfacts.org/api/v2/product/', 'https://world.openbeautyfacts.org/api/v2/product/', 'https://world.openproductsfacts.org/api/v2/product/']
+  for (const catalog of catalogs) {
+    try {
+      const response = await fetch(`${catalog}${encodeURIComponent(barcode)}.json`, { headers: { Accept: 'application/json', 'User-Agent': 'RockstarLens/1.0 (packaged-compliance-checker)' }, signal: AbortSignal.timeout(5000) })
+      if (!response.ok) continue
+      const payload = await readJsonResponse(response)
+      if (payload.status !== 1 || !payload.product) continue
+      const product = payload.product
+      return {
+        productName: product.product_name || product.product_name_en || product.generic_name || '',
+        brand: product.brands || '',
+        category: product.categories || product.categories_tags?.join(', ') || '',
+        ingredients: product.ingredients_text || product.ingredients_text_en || '',
+        allergens: product.allergens || product.allergens_tags?.join(', ') || '',
+        nutriScore: product.nutriscore_grade || 'UNKNOWN',
+        manufacturer: product.manufacturing_places || product.owner || product.brands || '',
+        quantity: product.quantity || '',
+      }
+    } catch { /* Try the next public catalog. */ }
+  }
+  return null
 }
 
 const normalizeReport = (report, suppliedCodes = {}) => ({
@@ -122,9 +162,20 @@ const normalizeReport = (report, suppliedCodes = {}) => ({
   category: cleanString(report.category, suppliedCodes.lookup?.category || 'Commodity'),
   brand: cleanString(report.brand, suppliedCodes.lookup?.brand || 'Not visible'),
   summary: cleanString(report.summary, 'The label was inspected against the seven-point compliance checklist.'),
-  barcodeInfo: suppliedCodes.barcode ? { detected: true, value: suppliedCodes.barcode, productName: cleanString(report.barcodeInfo?.productName, suppliedCodes.lookup?.productName || ''), brand: cleanString(report.barcodeInfo?.brand, suppliedCodes.lookup?.brand || ''), category: cleanString(report.barcodeInfo?.category, suppliedCodes.lookup?.category || ''), status: suppliedCodes.lookup ? 'FOUND_AND_EXPLAINED' : 'FOUND' } : { detected: false, value: '', productName: '', brand: '', category: '', status: 'NOT_PROVIDED' },
+  barcodeInfo: suppliedCodes.barcode ? { detected: true, value: suppliedCodes.barcode, format: cleanString(suppliedCodes.format, ''), productName: cleanString(report.barcodeInfo?.productName, suppliedCodes.lookup?.productName || ''), brand: cleanString(report.barcodeInfo?.brand, suppliedCodes.lookup?.brand || ''), category: cleanString(report.barcodeInfo?.category, suppliedCodes.lookup?.category || ''), status: suppliedCodes.lookup ? 'FOUND_AND_EXPLAINED' : 'FOUND' } : { detected: false, value: '', format: '', productName: '', brand: '', category: '', status: 'NOT_PROVIDED' },
   qrInfo: suppliedCodes.qrContent ? { detected: true, content: suppliedCodes.qrContent, type: /^https?:\/\//i.test(suppliedCodes.qrContent) ? 'URL' : 'TEXT', verificationStatus: /^https?:\/\//i.test(suppliedCodes.qrContent) ? 'DO_NOT_OPEN_AUTOMATICALLY' : 'SAFE_TO_REVIEW' } : { detected: false, content: '', type: 'NOT_FOUND', verificationStatus: 'NOT_FOUND' },
-  extractedInfo: report.extractedInfo || { mrp: 'UNKNOWN', netQuantity: 'UNKNOWN', batchLot: 'UNKNOWN', manufacturingDate: 'UNKNOWN', expiryBestBefore: 'UNKNOWN', manufacturer: 'UNKNOWN', manufacturerAddress: 'UNKNOWN', consumerCare: 'UNKNOWN', countryOfOrigin: 'UNKNOWN', otherDeclarations: [] },
+  extractedInfo: {
+    mrp: cleanString(report.extractedInfo?.mrp, 'UNKNOWN'),
+    netQuantity: cleanString(report.extractedInfo?.netQuantity, suppliedCodes.lookup?.quantity || 'UNKNOWN'),
+    batchLot: cleanString(report.extractedInfo?.batchLot, 'UNKNOWN'),
+    manufacturingDate: cleanString(report.extractedInfo?.manufacturingDate, 'UNKNOWN'),
+    expiryBestBefore: cleanString(report.extractedInfo?.expiryBestBefore, 'UNKNOWN'),
+    manufacturer: cleanString(report.extractedInfo?.manufacturer, suppliedCodes.lookup?.manufacturer || 'UNKNOWN'),
+    manufacturerAddress: cleanString(report.extractedInfo?.manufacturerAddress, 'UNKNOWN'),
+    consumerCare: cleanString(report.extractedInfo?.consumerCare, 'UNKNOWN'),
+    countryOfOrigin: cleanString(report.extractedInfo?.countryOfOrigin, 'UNKNOWN'),
+    otherDeclarations: Array.isArray(report.extractedInfo?.otherDeclarations) ? report.extractedInfo.otherDeclarations : [],
+  },
   complianceScore: Number.isFinite(Number(report.complianceScore)) ? Math.max(0, Math.min(100, Number(report.complianceScore))) : 0,
   complianceStatus: ['COMPLIANT', 'NEEDS_REVIEW', 'NON_COMPLIANT'].includes(report.complianceStatus) ? report.complianceStatus : 'NEEDS_REVIEW',
   aiConfidence: report.aiConfidence || { productDetection: 'LOW', ocr: 'LOW', codeDetection: 'LOW', compliance: 'LOW', overall: 'LOW' },
@@ -171,16 +222,31 @@ const analyze = async (request, response) => {
     const imageData = { type: imageType, base64: image.toString('base64') }
     const provider = geminiKey ? 'gemini' : 'nvidia'
     const language = request.headers['x-report-language'] || 'English'
-    const barcode = request.headers['x-barcode'] || ''
-    const qrContent = request.headers['x-qr-content'] ? decodeURIComponent(request.headers['x-qr-content']) : ''
+    const decoded = await decodeMachineCode(image)
+    const barcode = decoded.barcode || request.headers['x-barcode'] || ''
+    const qrContent = decoded.qrContent || (request.headers['x-qr-content'] ? decodeURIComponent(request.headers['x-qr-content']) : '')
     const barcodeLookup = await lookupBarcode(barcode)
     const suppliedCodes = barcode || qrContent ? `\nMachine-readable evidence supplied by the scanner: barcode=${barcode || 'none'}; QR=${qrContent || 'none'}. Preserve these values exactly and do not invent replacements.` : ''
-    const lookupEvidence = barcodeLookup ? `\nPublic product lookup for barcode ${barcode}: product=${barcodeLookup.productName || 'unknown'}; brand=${barcodeLookup.brand || 'unknown'}; category=${barcodeLookup.category || 'unknown'}; ingredients=${barcodeLookup.ingredients || 'unknown'}; allergens=${barcodeLookup.allergens || 'unknown'}; nutrition grade=${barcodeLookup.nutriScore}. Treat this as supporting evidence and reconcile it with the visible package image.` : ''
+    const lookupEvidence = barcodeLookup ? `\nPublic product lookup for barcode ${barcode}: product=${barcodeLookup.productName || 'unknown'}; brand=${barcodeLookup.brand || 'unknown'}; category=${barcodeLookup.category || 'unknown'}; manufacturer=${barcodeLookup.manufacturer || 'unknown'}; quantity=${barcodeLookup.quantity || 'unknown'}; ingredients=${barcodeLookup.ingredients || 'unknown'}; allergens=${barcodeLookup.allergens || 'unknown'}; nutrition grade=${barcodeLookup.nutriScore}. Treat this as supporting evidence and reconcile it with the visible package image.` : ''
     const prompt = localizedPrompt(language) + suppliedCodes + lookupEvidence
     const report = geminiKey ? await analyzeWithGemini(imageData, prompt) : await analyzeWithNvidia(imageData, prompt)
-    return sendJson(response, 200, { provider, ...normalizeReport(report, { barcode, qrContent, lookup: barcodeLookup }) })
+    return sendJson(response, 200, { provider, ...normalizeReport(report, { barcode, qrContent, format: decoded.format, lookup: barcodeLookup }) })
   } catch (error) {
     return sendJson(response, 502, { error: error instanceof Error ? error.message : 'The inspection service could not analyze this image.' })
+  }
+}
+
+const decodeBarcode = async (request, response) => {
+  try {
+    const { image } = await parseMultipartImage(request)
+    const decoded = await decodeMachineCode(image)
+    const value = decoded.barcode || decoded.qrContent
+    if (!value) return sendJson(response, 200, { detected: false, error: barcodeUnreadable })
+    const type = decoded.barcode ? 'BARCODE' : 'QR'
+    const lookup = decoded.barcode ? await lookupBarcode(decoded.barcode) : null
+    return sendJson(response, 200, { detected: true, type, value, format: decoded.format, lookup })
+  } catch {
+    return sendJson(response, 200, { detected: false, error: barcodeUnreadable })
   }
 }
 
@@ -211,6 +277,7 @@ const serveFile = async (request, response) => {
 }
 
 createServer((request, response) => {
+  if (request.method === 'POST' && request.url === '/api/decode-barcode') return decodeBarcode(request, response)
   if (request.method === 'POST' && request.url === '/api/analyze') return analyze(request, response)
   if (request.method === 'POST' && request.url === '/api/voice-report') return voiceReport(request, response)
   if (request.method === 'GET') return serveFile(request, response)
